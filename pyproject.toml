@@ -5,6 +5,9 @@ description = "Seeded evidence placement for reasoning benchmarks."
 requires-python = ">=3.10"
 dependencies = []
 
+[project.optional-dependencies]
+test = ["pytest"]
+
 [project.scripts]
 seedbed = "seedbed.cli:main"
 
