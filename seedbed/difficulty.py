@@ -1,16 +1,22 @@
 """Difficulty scorer (component 6): hop count + authority reversals crossed
 + distractor density along the path + low-salience carrier fraction.
-Weights are tunable and passed through to the spoiler log so a score is
-always reproducible from (seed, tier, weights).
+Weights are tunable and echoed into the spoiler log, so a score is always
+reproducible from (seed, tier, weights).
+
+Everything is measured over the solver's **live route** -- the claims
+actually credited for reaching the target -- rather than over every claim
+that could theoretically contribute. Scoring the potential chain would let
+unreachable decoys inflate the number.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, Optional
+from typing import Dict, List, Optional, Tuple
 
-from .access import AccessLogic, build_adjacency, shortest_path
+from .access import EASY, AccessLogic, build_adjacency, shortest_path
 from .model import ROLE_RANK, World
+from .solver import solve
 
 DEFAULT_WEIGHTS: Dict[str, float] = {
     "hop_count": 3.0,
@@ -30,46 +36,94 @@ class DifficultyScore:
     weights: Dict[str, float]
 
 
+def recovery_edges(
+    world: World, placement: Dict[str, str], logic: AccessLogic
+) -> List[Tuple[str, str, List[str]]]:
+    """(supporting_claim, supported_claim, slot_path) for every edge of the
+    live route, in deterministic order."""
+    result = solve(world, placement, logic)
+    if not result.solved:
+        return []
+    adj = build_adjacency(world, logic)
+    edges = []
+    for cid in sorted(result.live_route):
+        for supporter in sorted(result.used_alternative.get(cid, frozenset())):
+            path = shortest_path(adj, placement[supporter], placement[cid])
+            edges.append((supporter, cid, path or []))
+    return edges
+
+
 def score(
     world: World,
     placement: Dict[str, str],
     logic: AccessLogic,
     weights: Optional[Dict[str, float]] = None,
+    decoy_reference_logic: AccessLogic = EASY,
 ) -> DifficultyScore:
+    """`decoy_reference_logic` fixes the lens used to judge which decoys sit
+    "near" the recovery path, and deliberately does *not* follow `logic`.
+
+    A reader does not know the access rules -- inferring them is the task --
+    so a decoy one permissive hop off the path can mislead regardless of the
+    tier being graded. Scoring decoy proximity under `logic` also made the
+    component fall as strictness rose (stricter logic prunes edges, so fewer
+    decoys stay adjacent), which fought hop_count and left the total
+    non-monotonic across tiers on 19 of 56 fixed placements. Holding the
+    lens fixed removes that conflict without hiding it.
+    """
     weights = dict(DEFAULT_WEIGHTS if weights is None else weights)
     adj = build_adjacency(world, logic)
-    chain_ids = sorted(world.chain_claim_ids())
+    decoy_adj = build_adjacency(world, decoy_reference_logic)
+    result = solve(world, placement, logic)
+    route = result.live_route
+    edges = recovery_edges(world, placement, logic)
 
-    evidence_slot_ids = {placement[cid] for cid in chain_ids}
+    route_slot_ids = {placement[cid] for cid in route}
+    # Claims that are placed but not load-bearing: the decoys a reader can
+    # be lured onto.
+    decoy_slot_ids = {
+        slot_id for cid, slot_id in placement.items() if cid not in route and slot_id is not None
+    }
+
     hop_count = 0
     authority_reversals = 0
-    intermediate_slots: list[str] = []
+    path_slots: List[str] = []
 
-    for cid in chain_ids:
-        claim = world.claims[cid]
-        slot_id = placement[cid]
-        slot = world.slots[slot_id]
-        for req in claim.requires:
-            prereq_slot_id = placement[req]
-            path = shortest_path(adj, prereq_slot_id, slot_id)
-            if path:
-                hop_count += len(path) - 1
-                intermediate_slots.extend(path[1:-1])
-            prereq_author = world.actors[world.slots[prereq_slot_id].author]
-            this_author = world.actors[slot.author]
-            if ROLE_RANK[this_author.role] < ROLE_RANK[prereq_author.role]:
-                authority_reversals += 1
+    for supporter, cid, path in edges:
+        if path:
+            hop_count += len(path) - 1
+            path_slots.extend(path)
+        supporter_role = world.actors[world.slots[placement[supporter]].author].role
+        carrier_role = world.actors[world.slots[placement[cid]].author].role
+        if ROLE_RANK[carrier_role] < ROLE_RANK[supporter_role]:
+            authority_reversals += 1
 
-    if intermediate_slots:
-        non_evidence = sum(1 for sid in intermediate_slots if sid not in evidence_slot_ids)
-        distractor_density = non_evidence / len(intermediate_slots)
+    # How thick is the decoy field around the real evidence? For each
+    # load-bearing carrier, how many of its neighbours carry a
+    # non-load-bearing claim.
+    #
+    # Two earlier definitions were worse. Counting *empty filler* slots
+    # between evidence gave 1.0 on literally every seed -- a constant, and
+    # so dead weight in the score. Normalising by recovery-path length then
+    # made it a rate that could dilute as the path grew, so the total dipped
+    # under stricter tiers even though the absolute decoy count rose.
+    # Normalising by carrier count keeps the "per piece of real evidence"
+    # reading and a denominator that does not move with path length.
+    if route_slot_ids:
+        brushes = sum(
+            1
+            for slot_id in route_slot_ids
+            for nb in decoy_adj.get(slot_id, ())
+            if nb in decoy_slot_ids
+        )
+        distractor_density = brushes / len(route_slot_ids)
     else:
         distractor_density = 0.0
 
-    if evidence_slot_ids:
+    if route_slot_ids:
         low_salience_fraction = sum(
-            1 for sid in evidence_slot_ids if world.slots[sid].salience == "low"
-        ) / len(evidence_slot_ids)
+            1 for sid in route_slot_ids if world.slots[sid].salience == "low"
+        ) / len(route_slot_ids)
     else:
         low_salience_fraction = 0.0
 

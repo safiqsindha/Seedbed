@@ -1,42 +1,113 @@
-"""Seeded assumed fill over claims.
+"""Seeded assumed fill over claims, with backtracking.
 
-Adaptation note (see docs/PRIOR_ART_REPORT.md section 5.2): the source
-material's items have no inter-item prerequisite structure, so Assumed Fill
-there has to *assume* not-yet-placed items are already available in order to
-avoid a chicken-and-egg problem when checking reachability. Claims here
-carry an explicit prerequisite DAG (`Claim.requires`), and the access
-graph's connectivity is purely structural -- it never depends on which slot
-holds which claim. That collapses the "assume everything else is placed"
-trick to something simpler and strictly equivalent: process claims in a
-seeded topological order (prerequisites before dependents) and validate
-each placement against *real* prerequisite placements, which by
-construction are already final. The core Assumed Fill property is
-preserved -- every placement is checked against the state that will
-actually hold, so no post-hoc validity pass or retry is ever needed.
+Relationship to the prior art (docs/PRIOR_ART_REPORT.md): the source
+material's items carry no inter-item prerequisite structure, so its Assumed
+Fill can lean on "assume every unplaced item is already reachable" and never
+needs to retract a placement. Claims here carry an explicit support DAG with
+disjunctive alternatives, so that shortcut is not available: a placement
+made early can genuinely corner a later claim.
+
+An earlier revision of this module ignored that and placed greedily in
+topological order with no retraction, while claiming it preserved the
+no-retry guarantee. It did not -- measured against an exhaustive reference
+filler it raised UnsolvableWorldError on ~35% of worlds that were in fact
+fillable. This version does the honest thing and backtracks, so the search
+is *complete*: it fails only when no legal placement exists (or when the
+node budget is exhausted, which is reported as a distinct error rather than
+being conflated with impossibility).
+
+Two invariants are enforced at placement time rather than checked after:
+
+1. A chain claim is placed only where **exactly one** of its support
+   alternatives is live. That is what makes the result uncheatable, and it
+   is a proof rather than a hope: dropping evidence only ever shrinks the
+   known set, so a claim with a single live alternative has no fallback --
+   removing any live-route claim necessarily breaks the target. Redundant
+   support is the *only* way a proper subset could still solve, and it is
+   rejected here at the source.
+2. Candidates are tried in difficulty-maximizing order (greatest hop
+   distance from the supporting evidence first), so backtracking gives up
+   difficulty only as far as it must to stay solvable.
 """
 
 from __future__ import annotations
 
 import random
 from dataclasses import dataclass, field
-from typing import Dict, List
+from typing import Dict, FrozenSet, List, Optional, Sequence
 
 from .access import AccessLogic, bfs_reachable, build_adjacency, shortest_path
+from .difficulty import score
 from .model import World
+from .solver import solve
+
+DEFAULT_NODE_BUDGET = 200_000
+DEFAULT_SOLUTION_LIMIT = 32
+DEFAULT_TRACE_LIMIT = 5_000
 
 
-class UnsolvableWorldError(Exception):
-    """Raised the moment a claim has no legal slot under the given access
-    logic. Fails loudly and immediately -- never silently drops a claim or
-    degrades the solvability guarantee."""
+class FillError(Exception):
+    """Base class for every way a fill can fail to produce a placement."""
+
+
+class UnsolvableWorldError(FillError):
+    """No legal placement exists -- the search space was exhausted.
+
+    This is a proof of impossibility, not a heuristic giving up. Raised for
+    a claim with no legal slot, an unsatisfiable support cycle, or a world
+    whose constraints simply cannot be met.
+    """
+
+
+class SearchBudgetExceeded(FillError):
+    """The node budget ran out before the search could prove anything.
+
+    Deliberately distinct from UnsolvableWorldError: this means "don't
+    know", and conflating the two is how an engine ends up quietly claiming
+    a solvable world is impossible.
+    """
 
 
 @dataclass
 class RollLog:
+    """The placement decision for one claim in the *winning* placement."""
+
     claim_id: str
     candidates: List[str]
     chosen: str
     reason: str
+    alternative: List[str] = field(default_factory=list)
+
+
+@dataclass
+class SearchEvent:
+    """One step of the search, including the steps that were undone.
+
+    The winning placement alone is not an audit trail: with backtracking,
+    most of the seeded decision process is in the branches that were tried
+    and rejected. Recording only the survivors -- as this module originally
+    did -- leaves the seed reproducible but not *explicable*: you can rerun
+    it, but you cannot see why it landed where it did.
+    """
+
+    kind: str  # "place" | "backtrack" | "solution" | "dead_end"
+    depth: int
+    claim_id: str = ""
+    slot_id: str = ""
+    detail: str = ""
+
+
+@dataclass
+class RngDraws:
+    """Every draw taken from the seeded RNG, in order.
+
+    These are the only nondeterministic inputs to the fill, so together with
+    the seed they fully explain the search's shape.
+    """
+
+    claim_order_shuffle: List[str] = field(default_factory=list)
+    slot_rank_shuffles: Dict[str, List[str]] = field(default_factory=dict)
+    solution_choice: str = ""
 
 
 @dataclass
@@ -46,19 +117,37 @@ class FillResult:
     rolls: List[RollLog] = field(default_factory=list)
     seed: int = 0
     tier: str = ""
+    nodes_explored: int = 0
+    backtracks: int = 0
+    solutions_compared: int = 0
+    difficulty_total: float = 0.0
+    #: Full search trace. Capped by `trace_limit`; `trace_truncated` says so
+    #: explicitly rather than letting a partial log read as a complete one.
+    trace: List[SearchEvent] = field(default_factory=list)
+    trace_truncated: bool = False
+    rng_draws: RngDraws = field(default_factory=RngDraws)
+    #: (difficulty_total, placement) for every complete solution compared.
+    solution_scores: List[float] = field(default_factory=list)
 
 
-def _topological_order(world: World, rng: random.Random) -> List[str]:
+def _topological_order(world: World, rng: random.Random, draws: "RngDraws") -> List[str]:
+    """Prerequisites (across *all* alternatives) before dependents. Ties
+    broken by the seeded RNG."""
     claim_ids = list(world.claims.keys())
-    rng.shuffle(claim_ids)  # seed-dependent tie-break among claims at the same rank
+    rng.shuffle(claim_ids)
+    draws.claim_order_shuffle = list(claim_ids)
     remaining = set(claim_ids)
     placed: set[str] = set()
     order: List[str] = []
     while remaining:
-        ready = [cid for cid in claim_ids if cid in remaining and world.claims[cid].requires <= placed]
+        ready = [
+            cid
+            for cid in claim_ids
+            if cid in remaining and world.claims[cid].prerequisite_ids <= placed
+        ]
         if not ready:
             raise UnsolvableWorldError(
-                f"unsatisfiable claim dependency among {sorted(remaining)} "
+                f"unsatisfiable claim support among {sorted(remaining)} "
                 "(cycle, or a prerequisite that doesn't exist)"
             )
         for cid in ready:
@@ -68,73 +157,233 @@ def _topological_order(world: World, rng: random.Random) -> List[str]:
     return order
 
 
-def assumed_fill(world: World, logic: AccessLogic, seed: int) -> FillResult:
+def assumed_fill(
+    world: World,
+    logic: AccessLogic,
+    seed: int,
+    node_budget: int = DEFAULT_NODE_BUDGET,
+    solution_limit: int = DEFAULT_SOLUTION_LIMIT,
+    trace_limit: int = DEFAULT_TRACE_LIMIT,
+) -> FillResult:
+    """Place every claim, then return the hardest placement found.
+
+    Candidates are explored in difficulty-maximizing order, but the *first*
+    complete solution is not necessarily the hardest: a per-claim greedy
+    preference cannot see that choosing a shorter support alternative early
+    caps the whole chain's length. So the search collects up to
+    `solution_limit` complete placements and returns the best-scoring one.
+
+    This is a bounded best-of-N, deliberately not a global optimum -- that
+    would mean enumerating the entire space. `solution_limit` is the knob;
+    the spoiler log records how many solutions were actually compared so the
+    number is never mistaken for "the hardest placement that exists".
+    """
     rng = random.Random(seed)
+    draws = RngDraws()
+    trace: List[SearchEvent] = []
+    trace_state = {"truncated": False}
+
+    def record(kind: str, depth: int, claim_id: str = "", slot_id: str = "", detail: str = "") -> None:
+        if len(trace) >= trace_limit:
+            trace_state["truncated"] = True
+            return
+        trace.append(SearchEvent(kind=kind, depth=depth, claim_id=claim_id, slot_id=slot_id, detail=detail))
+
     adj = build_adjacency(world, logic)
-    order = _topological_order(world, rng)
+    order = _topological_order(world, rng, draws)
+    chain_ids = world.chain_claim_ids()
 
-    placement: Dict[str, str] = {}
-    rolls: List[RollLog] = []
-    used_slots: set[str] = set()
+    reach_cache: Dict[str, set] = {}
 
-    has_dependents: set[str] = set()
-    for claim in world.claims.values():
-        has_dependents.update(claim.requires)
+    def reachable_from(slot_id: str) -> set:
+        cached = reach_cache.get(slot_id)
+        if cached is None:
+            cached = bfs_reachable(adj, slot_id)
+            reach_cache[slot_id] = cached
+        return cached
 
+    # A stable, seed-derived tiebreak rank per (claim, slot). Computed up
+    # front so candidate ordering never depends on the path the search took
+    # to get here -- same seed, same ordering, byte-identical output.
+    slot_ids = sorted(world.slots)
+    tiebreak: Dict[str, Dict[str, int]] = {}
     for cid in order:
-        claim = world.claims[cid]
-        prereq_slot_ids = [placement[r] for r in claim.requires]
-        prereq_reachable = [bfs_reachable(adj, ps) for ps in prereq_slot_ids]
+        shuffled = list(slot_ids)
+        rng.shuffle(shuffled)
+        tiebreak[cid] = {sid: i for i, sid in enumerate(shuffled)}
+        draws.slot_rank_shuffles[cid] = list(shuffled)
 
-        legal: List[str] = []
-        for slot in world.slots.values():
-            if slot.id in used_slots:
-                continue
-            if not logic.can_carry(world, slot, claim):
-                continue
-            if not all(slot.id in reach for reach in prereq_reachable):
-                continue
-            legal.append(slot.id)
+    # Slots this claim could ever occupy, ignoring support: pure authority.
+    carriable: Dict[str, List[str]] = {
+        cid: [s for s in slot_ids if logic.can_carry(world, world.slots[s], world.claims[cid])]
+        for cid in order
+    }
 
-        if not legal:
+    # Fail fast and precisely on the obvious impossibility: a claim nobody
+    # in the world is allowed to author. Left to the search this is still
+    # correctly rejected, but only after exhausting every other claim's
+    # options -- which burns the node budget and reports "undetermined"
+    # instead of naming the claim that is actually at fault.
+    for cid in order:
+        if not carriable[cid]:
+            claim = world.claims[cid]
             raise UnsolvableWorldError(
-                f"claim {cid!r} has no legal slot under access logic {logic.name!r} "
-                f"(prerequisite slots: {prereq_slot_ids})"
+                f"claim {cid!r} has no legally carriable slot under access logic "
+                f"{logic.name!r}: no slot's author satisfies min_role={claim.min_role!r}"
+                + (
+                    f" and eligible_authors={sorted(claim.eligible_authors)}"
+                    if claim.eligible_authors
+                    else ""
+                )
             )
 
-        if len(legal) == 1:
-            chosen = legal[0]
-            reason = "forced (single legal candidate)"
-        else:
-            def hop_score(slot_id: str) -> int:
-                if not prereq_slot_ids:
-                    return 0
-                total = 0
-                for ps in prereq_slot_ids:
-                    path = shortest_path(adj, ps, slot_id)
-                    total += (len(path) - 1) if path else 0
-                return total
+    placement: Dict[str, str] = {}
+    rolls_by_claim: Dict[str, RollLog] = {}
+    used_slots: set[str] = set()
+    inferable: set[str] = set()
+    stats = {"nodes": 0, "backtracks": 0}
 
-            # Primary: maximize hop distance from prerequisites (difficulty).
-            # Final ties broken by the seeded RNG -- except for a claim that
-            # something else still depends on, where pure random choice can
-            # grab a late-timestamp slot and strand that dependent (which
-            # needs a *later* slot from the same shrinking author-eligible
-            # pool) -- the time-ordering analogue of a randomizer stranding
-            # progression behind a filled dead end. Such claims are narrowed
-            # to the earliest legal timestamp among the hardest tier first,
-            # so they never eat a dependent's only remaining room.
-            scored = {s: hop_score(s) for s in legal}
-            best = max(scored.values())
-            hardest = [s for s, v in scored.items() if v == best]
-            if cid in has_dependents:
-                earliest_ts = min(world.slots[s].timestamp for s in hardest)
-                hardest = [s for s in hardest if world.slots[s].timestamp == earliest_ts]
-            chosen = rng.choice(sorted(hardest))
-            reason = "max-difficulty" if len(hardest) < len(legal) else "max-difficulty (tie, seeded pick)"
+    def live_alternatives(cid: str, slot_id: str) -> List[FrozenSet[str]]:
+        """Support alternatives whose members are all *inferable* and all
+        able to reach `slot_id`.
 
-        placement[cid] = chosen
-        used_slots.add(chosen)
-        rolls.append(RollLog(claim_id=cid, candidates=sorted(legal), chosen=chosen, reason=reason))
+        Inferability, not mere placement, is the right test: a claim can be
+        placed and still be stranded (no live alternative of its own), and a
+        stranded claim must not prop up its dependents.
+        """
+        out = []
+        for alt in world.claims[cid].support:
+            if not alt <= inferable:
+                continue
+            if all(slot_id in reachable_from(placement[r]) for r in alt):
+                out.append(alt)
+        return out
 
-    return FillResult(placement=placement, order=order, rolls=rolls, seed=seed, tier=logic.name)
+    def candidates(cid: str) -> List[tuple]:
+        """(stranded, -hop_score, tiebreak, slot_id, alternative) for every
+        legal slot, live and hardest first."""
+        is_target = world.claims[cid].target
+        out = []
+        for sid in carriable[cid]:
+            if sid in used_slots:
+                continue
+            alts = live_alternatives(cid, sid)
+            # The one hard invariant: never two live alternatives. That is
+            # redundant support -- exactly the shortcut that would let a
+            # proper subset still solve -- so it is refused at the source.
+            if len(alts) >= 2:
+                continue
+            # Zero live alternatives is allowed: the claim lands stranded,
+            # which is what turns a losing route into a near-miss decoy. A
+            # target claim is the exception -- if it cannot be inferred, the
+            # seed has no solution at all, so prune here rather than at the
+            # leaf.
+            if is_target and not alts:
+                continue
+            alt = alts[0] if alts else frozenset()
+            hops = sum(
+                (len(p) - 1) if (p := shortest_path(adj, placement[r], sid)) else 0 for r in alt
+            )
+            out.append((not alts, -hops, tiebreak[cid][sid], sid, alt))
+        out.sort()
+        return out
+
+    solutions: List[tuple] = []
+
+    def search(i: int) -> bool:
+        """Returns True to stop the search (enough solutions collected)."""
+        if stats["nodes"] >= node_budget:
+            raise SearchBudgetExceeded(
+                f"node budget {node_budget} exhausted after placing {i}/{len(order)} claims; "
+                "this means UNDETERMINED, not impossible -- raise node_budget to search further"
+            )
+        if i == len(order):
+            # Defence in depth: the invariants above should make this
+            # unconditionally true, so a failure here is a real bug rather
+            # than an expected dead end.
+            if not solve(world, placement, logic).solved:
+                record("dead_end", i, detail="complete assignment failed the solvability oracle")
+                return False
+            total = score(world, placement, logic).total
+            solutions.append(
+                (
+                    total,
+                    dict(placement),
+                    {c: RollLog(**vars(r)) for c, r in rolls_by_claim.items()},
+                )
+            )
+            record(
+                "solution",
+                i,
+                detail=f"solution {len(solutions)} of at most {solution_limit}, difficulty {total:.4g}",
+            )
+            return len(solutions) >= solution_limit
+
+        cid = order[i]
+        options = candidates(cid)
+        if not options:
+            record("dead_end", i, claim_id=cid, detail="no legal slot given placements so far")
+            return False
+
+        for rank, (stranded, neg_hops, _tb, sid, alt) in enumerate(options):
+            stats["nodes"] += 1
+            placement[cid] = sid
+            used_slots.add(sid)
+            if not stranded:
+                inferable.add(cid)
+            reason = (
+                "stranded (no live support -- decoy)"
+                if stranded
+                else "forced (single legal candidate)"
+                if len(options) == 1
+                else f"max-difficulty (rank {rank + 1}/{len(options)}, {-neg_hops} hops)"
+            )
+            rolls_by_claim[cid] = RollLog(
+                claim_id=cid,
+                candidates=sorted(o[3] for o in options),
+                chosen=sid,
+                reason=reason,
+                alternative=sorted(alt),
+            )
+            record("place", i, claim_id=cid, slot_id=sid, detail=reason)
+            if search(i + 1):
+                return True
+            del placement[cid]
+            used_slots.discard(sid)
+            inferable.discard(cid)
+            rolls_by_claim.pop(cid, None)
+            stats["backtracks"] += 1
+            record("backtrack", i, claim_id=cid, slot_id=sid, detail="subtree yielded no solution")
+        return False
+
+    search(0)
+    if not solutions:
+        raise UnsolvableWorldError(
+            f"no legal placement exists under access logic {logic.name!r} "
+            f"(search exhausted after {stats['nodes']} nodes, {stats['backtracks']} backtracks)"
+        )
+
+    # Hardest first; ties fall back to discovery order, which is itself
+    # seed-determined, so the choice stays reproducible.
+    best_index, (best_total, best_placement, best_rolls) = max(
+        enumerate(solutions), key=lambda pair: pair[1][0]
+    )
+    draws.solution_choice = (
+        f"solution {best_index + 1} of {len(solutions)} compared, difficulty {best_total:.4g}"
+    )
+
+    return FillResult(
+        placement=best_placement,
+        order=order,
+        rolls=[best_rolls[cid] for cid in order],
+        seed=seed,
+        tier=logic.name,
+        nodes_explored=stats["nodes"],
+        backtracks=stats["backtracks"],
+        solutions_compared=len(solutions),
+        difficulty_total=best_total,
+        trace=trace,
+        trace_truncated=trace_state["truncated"],
+        rng_draws=draws,
+        solution_scores=[s[0] for s in solutions],
+    )

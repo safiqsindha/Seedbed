@@ -30,12 +30,19 @@ class AccessLogic:
     require_audience_overlap: bool  # dst's author must appear in src's audience
     cross_team_requires_reporting_or_meeting: bool  # a shared thread isn't enough across teams
     max_meeting_size_for_edge: Optional[int]  # None = any size; a large all-hands isn't a real tie
+    # None = knowledge keeps indefinitely. A number caps how stale a source
+    # may be: past that gap nobody is expected to still be carrying it, not
+    # even its own author. This is the knob that most sharply separates the
+    # tiers, because it prunes long-range edges the other flags leave intact.
+    max_time_gap: Optional[int]
 
     def connected(self, world: World, src: Slot, dst: Slot) -> bool:
         if src.id == dst.id:
             return False
         if dst.timestamp < src.timestamp:
             return False  # knowledge never flows backwards in time
+        if self.max_time_gap is not None and dst.timestamp - src.timestamp > self.max_time_gap:
+            return False  # the source is too stale to still be in play
 
         author_a = world.actors[src.author]
         author_b = world.actors[dst.author]
@@ -82,6 +89,7 @@ EASY = AccessLogic(
     require_audience_overlap=False,
     cross_team_requires_reporting_or_meeting=False,
     max_meeting_size_for_edge=None,
+    max_time_gap=None,
 )
 STANDARD = AccessLogic(
     name="standard",
@@ -89,6 +97,7 @@ STANDARD = AccessLogic(
     require_audience_overlap=True,
     cross_team_requires_reporting_or_meeting=False,
     max_meeting_size_for_edge=None,
+    max_time_gap=None,
 )
 HARD = AccessLogic(
     name="hard",
@@ -96,6 +105,12 @@ HARD = AccessLogic(
     require_audience_overlap=True,
     cross_team_requires_reporting_or_meeting=True,
     max_meeting_size_for_edge=2,
+    # Scaled to the toy world's 1..18 timeline: roughly "older than a third
+    # of the project's history is stale". Chosen for that rationale rather
+    # than for the number that separates the tiers best -- callers with a
+    # real timeline should set their own. Without it `hard` was nearly
+    # inert, agreeing with `standard` on 89 of 100 seeds.
+    max_time_gap=6,
 )
 
 TIERS: Dict[str, AccessLogic] = {t.name: t for t in (EASY, STANDARD, HARD)}
