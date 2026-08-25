@@ -338,12 +338,111 @@ failures, 0 unsolvable, 0 cheatable; monotonicity 0 violations / 132 with
 90 strictly harder easy→hard; completeness 0 false negatives / 78 and 0
 false positives / 42; cheatability still non-vacuous at 31.8%.
 
-### 6.5 Difficulty maximization is bounded, not global
+### 6.5 The engine had a scale ceiling barely above the toy world
+
+Found by asking a question that had never been asked: had this ever run on
+anything but the 40-slot toy world? It had not, and it could not.
+
+**Measured:** a 60-slot world with an 8-claim chain found **no solution
+within 200k nodes**, though a valid placement trivially exists (one was
+hand-built and verified solvable and uncheatable). Identical failure at 120
+and 200 slots. Not a best-of-N artefact — `solution_limit=1` failed the
+same way.
+
+**Two causes, both in the search:**
+
+1. *No lookahead.* The difficulty-maximizing order is actively adversarial
+   to satisfiability: it places each claim as late in time as it can, which
+   starves the next chain claim of reachable slots. Without a feasibility
+   check the search had to exhaust an enormous subtree before backing out.
+2. *Mandatory claims were placed stranded.* A claim on every route to the
+   target cannot be stranded and still yield a solution, but nothing said
+   so, and the search descended through entire dead chains before the
+   target finally refused.
+
+**Fixed** with the discipline the prior art has and this port lacked — a
+randomizer never places an item without first confirming the seed is still
+completable:
+
+- `mandatory_claims()` identifies claims on *every* route to a target;
+  those must be live, and only about those can anything be concluded (a
+  bypassable claim may legitimately strand).
+- One-step reachability forward-checking at every depth: a claim may not
+  take a slot that orphans the next mandatory claim. The classic CSP
+  forward-check.
+- A timestamp-horizon probe over the mandatory chain. Every access edge
+  runs forward in time, so *k* mandatory claims need *k* distinct slots at
+  non-decreasing timestamps; greedy-earliest **decides** that relaxation
+  rather than approximating it, so failing it proves the branch dead.
+
+Soundness was the hard part, and two earlier attempts were discarded for
+over-pruning — a greedy walk that preferred making claims live (which lit
+up both `c2` and `c2b` and then blocked `c3` everywhere), and a version
+that applied the reachability requirement to bypassable claims. Both were
+caught by `test_fill_is_complete_no_false_negatives`, which is exactly what
+that guard is for.
+
+**Result:**
+
+| world | before | after |
+|---|---|---|
+| 60 slots, chain 8 | budget exhausted | 0.15 s, 87 nodes |
+| 120 slots, chain 14 | budget exhausted | 0.61 s, 80 nodes |
+| 200 slots, chain 20 | budget exhausted | 1.64 s, 270 nodes |
+| 400 slots, chain 30 | — | 7.2 s, 507 nodes |
+| 800 slots, chain 40 | — | 220 s, 629 nodes |
+
+Completeness re-verified against the independent reference enumerator: **0
+false negatives / 78 fillable worlds, 0 false positives / 42 impossible
+ones.**
+
+The remaining ceiling has a different shape and is worth naming precisely:
+node counts stay tiny even at 800 slots (629), so the search is no longer
+the bottleneck — `build_adjacency` is O(slots²) and dominates. That is a
+graph-construction cost, not a search problem.
+
+This also fixed §6.4's untested-sampling gap for free: a 14-claim chain
+exceeds `EXHAUSTIVE_LIMIT`, so the documented sampling path now runs on a
+real world instead of only under a forced test parameter.
+
+### 6.6 Difficulty maximization is bounded, not global
 
 Requirement 4 asks for maximized inference difficulty. The fill explores
-candidates in difficulty-maximizing order and returns the best of the first
-`solution_limit` (default 32) complete placements. This is a bounded
-best-of-N, **not** a global optimum — a per-claim greedy preference cannot
-see that a short support alternative chosen early caps the whole chain.
+candidates in difficulty-maximizing order and returns the best complete
+placement it compared. This is a bounded best-of-N, **not** a global
+optimum — a per-claim greedy preference cannot see that a short support
+alternative chosen early caps the whole chain.
 `FillResult.solutions_compared` records how many were actually compared, so
 the number is never mistaken for the hardest placement that exists.
+
+The bound is now *adaptive* rather than a flat count. A fixed budget proved
+to be the wrong shape: raising the cap from 32 to 512 bought **+1.8** mean
+difficulty on the toy world and **+0.05** on the relay world, at 13× the
+time in both. So the search stops after `improvement_patience` (default 24)
+consecutive solutions fail to beat the best, capped by `solution_limit`
+(default 256). Effort goes where it is still paying.
+
+Honest accounting of what that buys: roughly **+0.15** mean difficulty over
+a fixed 32 at comparable cost, with headroom to keep climbing on worlds
+that reward it and an early exit on worlds that do not. It is a real
+improvement and a modest one. 24 was chosen as "long enough to cross a
+short plateau, short enough that a flat world stops early" — not the value
+that maximised any single measurement.
+
+### 6.7 Monotonicity: the ratified reading
+
+The requirement is now stated over the axis where it is defined. Difficulty
+monotonicity is a claim about **access-logic strictness**, so it is
+measured by scoring *one fixed placement* under each tier — isolating the
+single variable. Measured: **0 violations / 88** on the toy world.
+
+The discarded reading — generate a placement per tier and compare those
+totals — conflates two variables, since different tiers select different
+support routes and their scores therefore describe different puzzles. That
+reading holds only 69/100 and is explicitly **not** claimed.
+
+One limitation worth recording: on the relay world this comparison has *no
+samples*, because its `hard` tier is strict enough that easy-generated
+placements do not stay solvable under it. Nothing is wrong there; there is
+simply nothing to compare, and the property rests on the toy world's
+measurements alone.
