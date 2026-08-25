@@ -63,6 +63,8 @@ The library itself is world-agnostic — any `World` with slots, actors, and cla
 - `difficulty.py` -- tunable difficulty scorer (hop count, authority reversals, distractor density, low-salience carrier fraction).
 - `spoiler.py` / `cli.py` -- spoiler log assembly and the `seedbed` CLI.
 
+`validation/` -- outside the library (see non-goals above): a recovery harness that renders a placement as structured facts for a solver-under-test, scores it against the reference solver, and correlates `difficulty` against recovery accuracy. See [`validation/REPORT.md`](validation/REPORT.md) for what it found.
+
 ## What is and isn't guaranteed
 
 Worth reading before trusting a number out of this engine. Full detail, with
@@ -78,11 +80,11 @@ measurements, in [`docs/PRIOR_ART_REPORT.md` §6](docs/PRIOR_ART_REPORT.md).
 - *Loud on pathology.* A support cycle, a claim no author may carry, or an unsatisfiable authority requirement raises immediately and names the claim at fault.
 - *Works past toy scale.* Forward-checking (the randomizer discipline: never place an item without confirming the seed is still completable) fills 200 slots / 20-claim chains in ~1.6 s and 400 slots / 30 chains in ~7 s. Before it, a 60-slot world exhausted a 200k-node budget without finding a placement that trivially existed.
 - *Monotone difficulty with tier strictness*, measured on one fixed placement scored under each tier — the axis the property is defined on. 0 violations / 88.
+- *CI.* `.github/workflows/tests.yml` runs the suite on pytest across 3.10–3.12 on every push and PR.
 
 **Not guaranteed:**
 
 - *Globally maximal difficulty.* The fill returns the hardest complete placement it compared — a bounded best-of-N, now adaptive (stops after `improvement_patience` solutions without improvement, capped by `solution_limit`). `FillResult.solutions_compared` reports what was actually compared.
 - *Monotone difficulty across independently generated placements.* Different tiers pick different support routes, so those totals describe different puzzles. That reading holds only 69/100 and is not claimed.
-- *Calibrated weights.* `DEFAULT_WEIGHTS` are placeholders, not tuned against any real benchmark.
-- *Unbounded scale.* Past a few hundred slots, `build_adjacency` is O(slots²) and dominates — 800 slots takes ~220 s while the search itself explores only ~630 nodes. That is a graph-construction cost, not a search problem, and it is unaddressed.
-- *CI.* The repository has none; the suite runs only where it is run by hand.
+- *Calibrated weights.* `DEFAULT_WEIGHTS` are placeholders, not tuned against any real benchmark. A first attempt at validating them against actual recovery accuracy is in [`validation/REPORT.md`](validation/REPORT.md) — inconclusive on the two bundled worlds (a frontier model is near ceiling across their whole difficulty range), which is itself the finding: these worlds don't yet get hard enough to tell.
+- *Unbounded scale.* Past a few hundred slots, `build_adjacency` is O(slots²) and dominates — 800 slots takes ~220 s while the search itself explores only ~630 nodes. That is a graph-construction cost, not a search problem. `validation/profile_adjacency.py` reconfirms the O(n²) shape on a synthetic world; the fix (bucket slots by team/thread/meeting/reporting line instead of an all-pairs scan) is identified but not implemented.
