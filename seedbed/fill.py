@@ -43,6 +43,7 @@ from .solver import solve
 
 DEFAULT_NODE_BUDGET = 200_000
 DEFAULT_SOLUTION_LIMIT = 32
+DEFAULT_TRACE_LIMIT = 5_000
 
 
 class FillError(Exception):
@@ -69,11 +70,44 @@ class SearchBudgetExceeded(FillError):
 
 @dataclass
 class RollLog:
+    """The placement decision for one claim in the *winning* placement."""
+
     claim_id: str
     candidates: List[str]
     chosen: str
     reason: str
     alternative: List[str] = field(default_factory=list)
+
+
+@dataclass
+class SearchEvent:
+    """One step of the search, including the steps that were undone.
+
+    The winning placement alone is not an audit trail: with backtracking,
+    most of the seeded decision process is in the branches that were tried
+    and rejected. Recording only the survivors -- as this module originally
+    did -- leaves the seed reproducible but not *explicable*: you can rerun
+    it, but you cannot see why it landed where it did.
+    """
+
+    kind: str  # "place" | "backtrack" | "solution" | "dead_end"
+    depth: int
+    claim_id: str = ""
+    slot_id: str = ""
+    detail: str = ""
+
+
+@dataclass
+class RngDraws:
+    """Every draw taken from the seeded RNG, in order.
+
+    These are the only nondeterministic inputs to the fill, so together with
+    the seed they fully explain the search's shape.
+    """
+
+    claim_order_shuffle: List[str] = field(default_factory=list)
+    slot_rank_shuffles: Dict[str, List[str]] = field(default_factory=dict)
+    solution_choice: str = ""
 
 
 @dataclass
@@ -87,13 +121,21 @@ class FillResult:
     backtracks: int = 0
     solutions_compared: int = 0
     difficulty_total: float = 0.0
+    #: Full search trace. Capped by `trace_limit`; `trace_truncated` says so
+    #: explicitly rather than letting a partial log read as a complete one.
+    trace: List[SearchEvent] = field(default_factory=list)
+    trace_truncated: bool = False
+    rng_draws: RngDraws = field(default_factory=RngDraws)
+    #: (difficulty_total, placement) for every complete solution compared.
+    solution_scores: List[float] = field(default_factory=list)
 
 
-def _topological_order(world: World, rng: random.Random) -> List[str]:
+def _topological_order(world: World, rng: random.Random, draws: "RngDraws") -> List[str]:
     """Prerequisites (across *all* alternatives) before dependents. Ties
     broken by the seeded RNG."""
     claim_ids = list(world.claims.keys())
     rng.shuffle(claim_ids)
+    draws.claim_order_shuffle = list(claim_ids)
     remaining = set(claim_ids)
     placed: set[str] = set()
     order: List[str] = []
@@ -121,6 +163,7 @@ def assumed_fill(
     seed: int,
     node_budget: int = DEFAULT_NODE_BUDGET,
     solution_limit: int = DEFAULT_SOLUTION_LIMIT,
+    trace_limit: int = DEFAULT_TRACE_LIMIT,
 ) -> FillResult:
     """Place every claim, then return the hardest placement found.
 
@@ -136,8 +179,18 @@ def assumed_fill(
     number is never mistaken for "the hardest placement that exists".
     """
     rng = random.Random(seed)
+    draws = RngDraws()
+    trace: List[SearchEvent] = []
+    trace_state = {"truncated": False}
+
+    def record(kind: str, depth: int, claim_id: str = "", slot_id: str = "", detail: str = "") -> None:
+        if len(trace) >= trace_limit:
+            trace_state["truncated"] = True
+            return
+        trace.append(SearchEvent(kind=kind, depth=depth, claim_id=claim_id, slot_id=slot_id, detail=detail))
+
     adj = build_adjacency(world, logic)
-    order = _topological_order(world, rng)
+    order = _topological_order(world, rng, draws)
     chain_ids = world.chain_claim_ids()
 
     reach_cache: Dict[str, set] = {}
@@ -158,6 +211,7 @@ def assumed_fill(
         shuffled = list(slot_ids)
         rng.shuffle(shuffled)
         tiebreak[cid] = {sid: i for i, sid in enumerate(shuffled)}
+        draws.slot_rank_shuffles[cid] = list(shuffled)
 
     # Slots this claim could ever occupy, ignoring support: pure authority.
     carriable: Dict[str, List[str]] = {
@@ -248,19 +302,27 @@ def assumed_fill(
             # unconditionally true, so a failure here is a real bug rather
             # than an expected dead end.
             if not solve(world, placement, logic).solved:
+                record("dead_end", i, detail="complete assignment failed the solvability oracle")
                 return False
+            total = score(world, placement, logic).total
             solutions.append(
                 (
-                    score(world, placement, logic).total,
+                    total,
                     dict(placement),
                     {c: RollLog(**vars(r)) for c, r in rolls_by_claim.items()},
                 )
+            )
+            record(
+                "solution",
+                i,
+                detail=f"solution {len(solutions)} of at most {solution_limit}, difficulty {total:.4g}",
             )
             return len(solutions) >= solution_limit
 
         cid = order[i]
         options = candidates(cid)
         if not options:
+            record("dead_end", i, claim_id=cid, detail="no legal slot given placements so far")
             return False
 
         for rank, (stranded, neg_hops, _tb, sid, alt) in enumerate(options):
@@ -269,19 +331,21 @@ def assumed_fill(
             used_slots.add(sid)
             if not stranded:
                 inferable.add(cid)
+            reason = (
+                "stranded (no live support -- decoy)"
+                if stranded
+                else "forced (single legal candidate)"
+                if len(options) == 1
+                else f"max-difficulty (rank {rank + 1}/{len(options)}, {-neg_hops} hops)"
+            )
             rolls_by_claim[cid] = RollLog(
                 claim_id=cid,
                 candidates=sorted(o[3] for o in options),
                 chosen=sid,
-                reason=(
-                    "stranded (no live support -- decoy)"
-                    if stranded
-                    else "forced (single legal candidate)"
-                    if len(options) == 1
-                    else f"max-difficulty (rank {rank + 1}/{len(options)}, {-neg_hops} hops)"
-                ),
+                reason=reason,
                 alternative=sorted(alt),
             )
+            record("place", i, claim_id=cid, slot_id=sid, detail=reason)
             if search(i + 1):
                 return True
             del placement[cid]
@@ -289,6 +353,7 @@ def assumed_fill(
             inferable.discard(cid)
             rolls_by_claim.pop(cid, None)
             stats["backtracks"] += 1
+            record("backtrack", i, claim_id=cid, slot_id=sid, detail="subtree yielded no solution")
         return False
 
     search(0)
@@ -300,7 +365,12 @@ def assumed_fill(
 
     # Hardest first; ties fall back to discovery order, which is itself
     # seed-determined, so the choice stays reproducible.
-    best_total, best_placement, best_rolls = max(solutions, key=lambda s: s[0])
+    best_index, (best_total, best_placement, best_rolls) = max(
+        enumerate(solutions), key=lambda pair: pair[1][0]
+    )
+    draws.solution_choice = (
+        f"solution {best_index + 1} of {len(solutions)} compared, difficulty {best_total:.4g}"
+    )
 
     return FillResult(
         placement=best_placement,
@@ -312,4 +382,8 @@ def assumed_fill(
         backtracks=stats["backtracks"],
         solutions_compared=len(solutions),
         difficulty_total=best_total,
+        trace=trace,
+        trace_truncated=trace_state["truncated"],
+        rng_draws=draws,
+        solution_scores=[s[0] for s in solutions],
     )
