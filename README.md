@@ -8,11 +8,50 @@ Standalone Python library: no LLM calls, no prose generation, no external servic
 
 ```
 pip install -e .
-seedbed --seed 0 --tier standard        # prints a spoiler log as JSON
-python -m pytest                        # run the test suite
+seedbed --world toy --tier standard --seed 0    # prints a spoiler log as JSON
+python -m pytest                                # run the test suite
 ```
 
-`seedbed.toyworld.build_world()` returns a hand-authored 40-slot / 8-actor / 7-claim toy world used by the test suite and the CLI's default. The library itself (`seedbed.model`, `seedbed.access`, `seedbed.fill`, `seedbed.solver`, `seedbed.cheat`, `seedbed.difficulty`, `seedbed.spoiler`) is world-agnostic -- any `World` with slots, actors, and claims works.
+## Using it as a module
+
+`seedbed.api` is the supported surface. One call in, one frozen result out:
+
+```python
+from seedbed import generate, build_world
+
+result = generate(build_world("toy"), tier="hard", seed=7)
+
+result.placement            # claim id -> slot id (every claim placed)
+result.live_route           # claims that actually carry the inference
+result.stranded             # placed but not load-bearing: the decoys
+result.recovery             # ordered inference steps, each with its slot path
+result.difficulty           # score, with .difficulty_breakdown per term
+result.solvable             # always True -- generate() raises otherwise
+result.uncheatable          # likewise
+result.spoiler(world)       # full audit trail, on demand
+```
+
+Bring your own world and address it by name:
+
+```python
+from seedbed import register_world, Claim, Slot, Actor, World, requires, either
+
+register_world("mine", build_my_world)
+result = generate(build_world("mine"), seed=0)
+```
+
+`generate()` raises `UnsolvableWorldError` when no legal placement exists and `SearchBudgetExceeded` when the search ran out of budget without deciding — different things, deliberately different types, both subclasses of `FillError`.
+
+Rendering, prose, and LLM integration sit on the far side of this line by design (they are the project's stated non-goals). A renderer consumes a `GeneratedSeed`; it does not reach into the engine.
+
+## Bundled worlds
+
+Two hand-authored worlds, deliberately different in shape, so guarantees aren't statements about one topology:
+
+- **`toy`** — 40 slots, 8 actors, 7 claims. Disjunction mid-chain, flat hierarchy.
+- **`relay`** — 45 slots, 10 actors, 8 claims. Deeper chain, disjunction at the *target*, two-level reporting hierarchy, authority gates stacked along the chain.
+
+The library itself is world-agnostic — any `World` with slots, actors, and claims works.
 
 ## Modules
 
@@ -37,9 +76,13 @@ measurements, in [`docs/PRIOR_ART_REPORT.md` §6](docs/PRIOR_ART_REPORT.md).
 - *Reproducible, and explicable.* Same seed, same tier, byte-identical placement and spoiler log. The log carries the whole search — including the branches that were undone — and every RNG draw, so a run can be explained and not merely repeated.
 - *Three distinct tiers.* `easy`/`standard`/`hard` are nested strictness settings of one predicate (`hard`'s edges are a strict subset of `standard`'s), and they diverge on most seeds rather than in name only.
 - *Loud on pathology.* A support cycle, a claim no author may carry, or an unsatisfiable authority requirement raises immediately and names the claim at fault.
+- *Works past toy scale.* Forward-checking (the randomizer discipline: never place an item without confirming the seed is still completable) fills 200 slots / 20-claim chains in ~1.6 s and 400 slots / 30 chains in ~7 s. Before it, a 60-slot world exhausted a 200k-node budget without finding a placement that trivially existed.
+- *Monotone difficulty with tier strictness*, measured on one fixed placement scored under each tier — the axis the property is defined on. 0 violations / 88.
 
 **Not guaranteed:**
 
-- *Globally maximal difficulty.* The fill returns the hardest of the first `solution_limit` (default 32) complete placements — a bounded best-of-N. `FillResult.solutions_compared` reports the bound.
-- *Monotone difficulty across independently generated placements.* Monotonicity holds for one fixed placement scored under each tier (0 violations / 177). Different tiers otherwise pick different support routes, so those totals are not comparable.
+- *Globally maximal difficulty.* The fill returns the hardest complete placement it compared — a bounded best-of-N, now adaptive (stops after `improvement_patience` solutions without improvement, capped by `solution_limit`). `FillResult.solutions_compared` reports what was actually compared.
+- *Monotone difficulty across independently generated placements.* Different tiers pick different support routes, so those totals describe different puzzles. That reading holds only 69/100 and is not claimed.
 - *Calibrated weights.* `DEFAULT_WEIGHTS` are placeholders, not tuned against any real benchmark.
+- *Unbounded scale.* Past a few hundred slots, `build_adjacency` is O(slots²) and dominates — 800 slots takes ~220 s while the search itself explores only ~630 nodes. That is a graph-construction cost, not a search problem, and it is unaddressed.
+- *CI.* The repository has none; the suite runs only where it is run by hand.

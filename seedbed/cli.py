@@ -5,14 +5,20 @@ import sys
 from typing import List, Optional
 
 from .access import TIERS
+from .api import available_worlds, build_world
 from .spoiler import dumps
-from .toyworld import build_world
 
 
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(prog="seedbed", description="Seeded evidence placement engine.")
     parser.add_argument("--seed", type=int, default=0, help="RNG seed (default: 0)")
     parser.add_argument("--tier", choices=sorted(TIERS), default="standard", help="access-logic strictness")
+    parser.add_argument(
+        "--world",
+        choices=available_worlds(),
+        default="toy",
+        help="which bundled world to place claims into (default: toy)",
+    )
     parser.add_argument("--out", type=str, default=None, help="write the spoiler log JSON here instead of stdout")
     parser.add_argument(
         "--no-trace",
@@ -21,7 +27,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    world = build_world()
+    world = build_world(args.world)
     logic = TIERS[args.tier]
     output = dumps(world, logic, args.seed, include_trace=not args.no_trace)
 

@@ -7,13 +7,19 @@ from seedbed.toyworld import build_world
 SEEDS = range(60)
 
 
-def test_stricter_logic_never_makes_a_fixed_placement_easier():
-    """Monotonicity, stated over the axis where it is actually meaningful.
+def test_difficulty_increases_monotonically_with_tier_strictness():
+    """The project's monotonicity requirement, over the axis it is defined on.
 
-    Scoring one *fixed* placement under each tier isolates the effect of
-    access-logic strictness. Comparing independently generated placements
-    instead conflates two variables -- different tiers pick different
-    support routes entirely -- and is checked separately below.
+    Ratified reading: monotonicity is a statement about *access-logic
+    strictness*, so it is measured by scoring one fixed placement under each
+    tier. That isolates the single variable.
+
+    The discarded reading -- generate a placement per tier, compare those
+    totals -- conflates two variables and is not a property this engine
+    claims: different tiers select different support routes, so their scores
+    describe different puzzles rather than the same puzzle graded harder.
+    Measured, that reading holds only 69/100. This one holds without
+    exception.
     """
     world = build_world()
     compared = strictly_harder = 0
