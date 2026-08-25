@@ -1,2 +1,3 @@
 # Seedbed
 Seeded evidence placement for reasoning benchmarks.
+Seedbed scatters atomic claims across a graph of artifact slots so that the reasoning chain is maximally tangled but provably recoverable. Borrowing assumed-fill from game randomizers, it guarantees every seed is solvable, verifies it can’t be shortcut, scores its difficulty, and emits a spoiler log — so benchmarks are reproducible from a seed instead of hand-curated.
