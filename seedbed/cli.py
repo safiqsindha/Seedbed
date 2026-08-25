@@ -14,11 +14,16 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--seed", type=int, default=0, help="RNG seed (default: 0)")
     parser.add_argument("--tier", choices=sorted(TIERS), default="standard", help="access-logic strictness")
     parser.add_argument("--out", type=str, default=None, help="write the spoiler log JSON here instead of stdout")
+    parser.add_argument(
+        "--no-trace",
+        action="store_true",
+        help="omit the full search trace (kept by default: it is the audit trail)",
+    )
     args = parser.parse_args(argv)
 
     world = build_world()
     logic = TIERS[args.tier]
-    output = dumps(world, logic, args.seed)
+    output = dumps(world, logic, args.seed, include_trace=not args.no_trace)
 
     if args.out:
         with open(args.out, "w", encoding="utf-8") as f:

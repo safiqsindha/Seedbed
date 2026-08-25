@@ -18,7 +18,7 @@ python -m pytest                        # run the test suite
 
 - `model.py` -- `Actor`, `Claim`, `Slot`, `World`. A claim's `support` is a tuple of **alternative sufficient sets** (`requires(...)` for one conjunctive route, `either(...)` for several), so a conclusion can be established more than one way.
 - `access.py` -- pluggable `AccessLogic` predicate (graph reachability + authority checks) and the `EASY`/`STANDARD`/`HARD` logic tiers.
-- `fill.py` -- seeded assumed fill with **backtracking**: places claims into slots, exploring difficulty-maximizing candidates first and never placing a claim where two support alternatives are live.
+- `fill.py` -- seeded assumed fill with **backtracking**: places claims into slots, exploring difficulty-maximizing candidates first and never placing a claim where two support alternatives are live. Records a full audit trail: every placement, backtrack, dead end and solution (`trace`), plus every draw taken from the seeded RNG (`rng_draws`).
 - `solver.py` -- the solvability oracle: fixed-point recovery of which claims are inferable, and which are actually **load-bearing** (`SolveResult.live_route`).
 - `cheat.py` -- cheatability check: confirms the solver fails on every proper subset of the *live route*.
 - `difficulty.py` -- tunable difficulty scorer (hop count, authority reversals, distractor density, low-salience carrier fraction).
@@ -34,7 +34,8 @@ measurements, in [`docs/PRIOR_ART_REPORT.md` §6](docs/PRIOR_ART_REPORT.md).
 - *Solvable.* Every placement the fill returns is verified by the reference solver.
 - *Uncheatable.* No proper subset of the live route recovers the target. The fill prevents redundant support at placement time, so this is structural rather than a post-hoc filter.
 - *Complete.* The fill fails only when no legal placement exists. Verified against an independent reference enumerator: 0 false negatives over 80 fillable worlds, 0 false positives over 40 impossible ones. `SearchBudgetExceeded` reports "don't know" separately from `UnsolvableWorldError`'s "proven impossible".
-- *Reproducible.* Same seed, same tier, byte-identical placement and spoiler log.
+- *Reproducible, and explicable.* Same seed, same tier, byte-identical placement and spoiler log. The log carries the whole search — including the branches that were undone — and every RNG draw, so a run can be explained and not merely repeated.
+- *Three distinct tiers.* `easy`/`standard`/`hard` are nested strictness settings of one predicate (`hard`'s edges are a strict subset of `standard`'s), and they diverge on most seeds rather than in name only.
 - *Loud on pathology.* A support cycle, a claim no author may carry, or an unsatisfiable authority requirement raises immediately and names the claim at fault.
 
 **Not guaranteed:**

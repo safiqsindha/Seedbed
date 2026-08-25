@@ -291,7 +291,54 @@ Now:
 Across independently generated placements the total is *not* guaranteed
 monotone, and this is not claimed. That comparison is not apples-to-apples.
 
-### 6.4 Difficulty maximization is bounded, not global
+### 6.4 Three spec items found unmet on a later audit
+
+A re-read of the original component list against the code — rather than
+against my own summary of it — turned up three more gaps. All are fixed;
+recorded here because two of them were capability that *looked* present.
+
+**"Every roll logged" (component 3) was not met.** Measured on seed
+0/standard, the fill recorded 7 rolls — one per claim, for the winning
+placement — while the search had explored 273 nodes and made 266
+backtracks. Over 96% of the seeded decision process was invisible.
+Backtracking, added in §6.1, had made this *worse*: rejected branches were
+discarded silently. A seed was reproducible but not explicable — you could
+rerun it, not see why it landed where it did.
+
+Now `FillResult` carries a full `trace` (every placement, backtrack, dead
+end, and solution, with depth), `rng_draws` (every draw taken from the
+seeded RNG — together with the seed these are the only nondeterministic
+inputs), and `solution_scores` (what best-of-N actually compared). The
+trace is capped by `trace_limit` with `trace_truncated` set explicitly, and
+the CLI keeps it by default (`--no-trace` to omit). On the same seed the
+trace now holds 775 events against 7 rolls.
+
+**The recursive-DFS path enumeration was dead code.** `all_simple_paths`
+— the port of the prior art's `PathsToRegion`, which the brief explicitly
+named — was defined and never called. Component 4 says "BFS/DFS recovery";
+in practice it was BFS-only. It is now wired into the spoiler log, which is
+where it belongs: per recovery edge the log reports
+`distinct_simple_paths`, a few `example_alternate_paths`, and
+`distinct_simple_paths_is_lower_bound` when the count hits its cap, so a
+capped enumeration cannot read as an exact total.
+
+**`hard` was nearly inert.** It agreed with `standard` on **89 of 100
+seeds**, pruning only 8% more edges (235 → 216) where easy→standard prunes
+29%. The engine nominally offered three tiers and effectively offered two.
+Added `max_time_gap` to `AccessLogic`: a cap on how stale a source may be,
+applied to every edge including same-author ones, since staleness is about
+the age of the source rather than who carries it. `hard` sets 6 — scaled to
+the toy world's 1..18 timeline as "older than a third of the project's
+history", chosen for that rationale rather than for whichever number
+separated best. Result: 216 → 155 edges, agreement with `standard` down to
+19/60, and all 60 seeds still fill.
+
+Re-verified after the graph change: 450 (seed × tier) runs with 0 fill
+failures, 0 unsolvable, 0 cheatable; monotonicity 0 violations / 132 with
+90 strictly harder easy→hard; completeness 0 false negatives / 78 and 0
+false positives / 42; cheatability still non-vacuous at 31.8%.
+
+### 6.5 Difficulty maximization is bounded, not global
 
 Requirement 4 asks for maximized inference difficulty. The fill explores
 candidates in difficulty-maximizing order and returns the best of the first
