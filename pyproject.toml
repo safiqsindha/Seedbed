@@ -1,0 +1,19 @@
+[project]
+name = "seedbed"
+version = "0.1.0"
+description = "Seeded evidence placement for reasoning benchmarks."
+requires-python = ">=3.10"
+dependencies = []
+
+[project.scripts]
+seedbed = "seedbed.cli:main"
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["seedbed*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
