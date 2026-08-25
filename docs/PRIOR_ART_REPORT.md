@@ -1,9 +1,11 @@
 # Prior-Art Report: Fill Algorithm Selection for Seedbed
 
-Status: **draft for review** — this is deliverable 1 of 6 (see project plan in the
-task description). No engine code has been written yet; this document exists so
-the algorithm choice and terminology mapping can be checked before anything is
-built on top of them.
+Status: **implemented, with corrections** — originally written as deliverable 1
+of 6, before any engine code existed. The recommendation below (Assumed Fill)
+survived implementation; two claims about *how faithfully it was ported* did
+not. See [§6 Corrections after implementation](#6-corrections-after-implementation)
+for what was wrong, how it was measured, and what changed. That section is the
+authority wherever it contradicts the original text above it.
 
 ## 1. What was read
 
@@ -185,3 +187,116 @@ exhaustively. For larger worlds this doesn't scale, so the plan is:
 
 Report ends here per the requested deliverable order — holding before writing
 any engine code pending review of the above.
+
+---
+
+## 6. Corrections after implementation
+
+The three open questions in §5 resolved as: Python; a claim DAG (but
+**disjunctive**, see below); placeholder weights. More importantly, two
+claims made during the first implementation turned out to be false when
+measured. Both are recorded here rather than quietly fixed, because both
+were asserted confidently in a commit message and a merged PR description.
+
+### 6.1 The port did not preserve assumed fill's no-retry guarantee
+
+**Claimed:** that processing claims in topological order and validating
+against *real* (not assumed) prerequisite placements was "strictly
+equivalent" to the source material's assume-everything-else trick, and so
+inherited its property that no placement ever needs retracting.
+
+**Reality:** it is not equivalent. The prior art's items carry no
+inter-item prerequisite structure, which is exactly what lets it assume
+unplaced items are available and never backtrack. Claims *do* carry that
+structure, so an early placement can genuinely corner a later claim. The
+first implementation had no retraction, so when it cornered itself it
+raised `UnsolvableWorldError`.
+
+**Measured:** against an exhaustive reference filler over worlds where a
+legal placement provably exists, the original greedy fill wrongly reported
+impossibility on **79 of 227 worlds — a 34.8% false-negative rate**. It
+passed its own test suite because the toy world had been tuned until it
+did.
+
+**Fixed:** `fill.py` now performs real backtracking search. Re-measured
+against an independent reference enumerator (sharing no pruning logic —
+only the public `solve()` / `check_cheatability()` contract): **0 false
+negatives across 80 fillable worlds, 0 false positives across 40 provably
+impossible ones.** Locked in by `test_fill.py::test_fill_is_complete_no_false_negatives`.
+
+A separate `SearchBudgetExceeded` now distinguishes "don't know" from
+"proven impossible". Conflating those is how the original bug stayed
+invisible.
+
+### 6.2 The cheatability check was vacuous
+
+**Claimed:** that re-running the solver over proper subsets verified the
+chain could not be short-circuited.
+
+**Reality:** with purely conjunctive `requires`, the model could not
+*express* a shortcut. A target had exactly one route by construction, so
+dropping any chain claim always broke it, and `uncheatable=True` was a
+theorem about the data structure rather than a measurement of the seed.
+Fed **2000 deliberately absurd random placements, the check never once
+returned False.** The arXiv:2510.11956 concern it was meant to address —
+benchmarks solved without genuine multi-hop inference — was entirely
+untouched.
+
+**Fixed:** two changes.
+
+- `Claim.support` is now a tuple of **alternative sufficient sets** (see
+  `model.Support`, `model.either`): a claim can be established two
+  independent ways, which is what a shortcut *is*. The toy world exercises
+  this — `c3` is supported by either `c2` or `c2b`.
+- The subsets varied are the solver's **live route** (the claims actually
+  credited for reaching the target), not every claim that could
+  theoretically contribute. Distractors are *supposed* to be droppable;
+  requiring otherwise would fail every world containing a decoy.
+
+**Re-measured:** the check now flags **31.8% of random solvable placements
+(5,867 of 18,461) as cheatable**, correctly naming the redundantly
+supported claim. Non-vacuity is locked in by
+`test_cheat.py::test_cheatability_check_is_not_vacuous`.
+
+The fill prevents the condition at the source rather than rejecting it
+after the fact: a claim is never placed where two of its alternatives are
+live. That is a proof, not a heuristic — dropping evidence only shrinks the
+known set, so a claim with a single live alternative has no fallback.
+
+### 6.3 Difficulty tiers: what is and is not guaranteed
+
+The original suite asserted monotonically increasing difficulty across
+tiers. That assertion had been weakened to `>=` and the toy world adjusted
+until it passed — over 200 seeds, `standard` and `hard` were in fact
+**tied 200/200 times**.
+
+Two things were wrong. `distractor_density` counted *empty filler slots*
+between evidence, which evaluated to `1.0` on literally every seed — a
+constant contributing nothing. And difficulty was being compared across
+*independently generated* placements, which conflates two variables, since
+different tiers pick different support routes entirely.
+
+Now:
+
+- `distractor_density` counts decoy-carrying neighbours per load-bearing
+  carrier, judged under a **fixed permissive lens** (a reader does not know
+  the access rules — inferring them is the task). It varies, and it no
+  longer falls as strictness rises.
+- Monotonicity is asserted where it is meaningful: one **fixed** placement
+  scored under each tier. **0 violations across 177 placements, 107 of them
+  strictly harder easy→hard.** `hop_count` is monotone by construction
+  (removing edges can only lengthen or sever a shortest path) and is tested
+  separately.
+
+Across independently generated placements the total is *not* guaranteed
+monotone, and this is not claimed. That comparison is not apples-to-apples.
+
+### 6.4 Difficulty maximization is bounded, not global
+
+Requirement 4 asks for maximized inference difficulty. The fill explores
+candidates in difficulty-maximizing order and returns the best of the first
+`solution_limit` (default 32) complete placements. This is a bounded
+best-of-N, **not** a global optimum — a per-claim greedy preference cannot
+see that a short support alternative chosen early caps the whole chain.
+`FillResult.solutions_compared` records how many were actually compared, so
+the number is never mistaken for the hardest placement that exists.

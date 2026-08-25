@@ -1,4 +1,4 @@
-"""Hand-authored toy world: 8 actors, ~40 slots, 6 claims.
+"""Hand-authored toy world: 8 actors, 40 slots, 7 claims.
 
 No prose, no real org data -- slots are structs. Structure (who reports to
 whom, which threads/meetings exist, which slots are candidates for which
@@ -7,18 +7,26 @@ RNG only ever chooses *among* these hand-authored candidates at fill time.
 
 Claim chain (target = c4):
     c1 (vendor_contract_signed, sales)
-      -> c2 (budget_reallocated, manager+)
-        -> c3 (timeline_slipped, eng)
-          -> c4 (exec_briefed_on_risk, exec)  [TARGET]
+      -> c2 (budget_reallocated, manager+)     \\
+                                                >-> c3 (timeline_slipped, eng)
+    c2b (staffing_frozen, manager+)            /       -> c4 [TARGET, exec]
 
-Distractors:
-    c5 (vendor_contract_amended) -- branches off c1, dead-ends (decoy)
+c3 is supported by EITHER c2 OR c2b -- two independent routes to the same
+conclusion. This is the point of the disjunction: the filler must ensure
+exactly one of them is actually live (the other's carrier has to land
+somewhere that cannot reach c3's slot), which makes the losing route a
+genuine near-miss decoy rather than inert filler. It is also what gives the
+cheatability check something real to detect: were both routes live, dropping
+either one would still leave the target recoverable.
+
+Distractors (never load-bearing for the target):
+    c5 (vendor_contract_amended) -- branches off c1, dead-ends
     c6 (office_lease_renewed) -- unrelated, no dependents
 """
 
 from __future__ import annotations
 
-from .model import Actor, Claim, Slot, World
+from .model import ROOT, Actor, Claim, Slot, World, either, requires
 
 ACTORS = {
     a.id: a
@@ -47,16 +55,20 @@ REPORTS_TO = {
 CLAIMS = {
     c.id: c
     for c in [
-        Claim("c1", "vendor_contract_signed", requires=frozenset(), min_role="ic",
+        Claim("c1", "vendor_contract_signed", support=ROOT, min_role="ic",
               eligible_authors=frozenset({"dave", "erin"})),
-        Claim("c2", "budget_reallocated", requires=frozenset({"c1"}), min_role="manager",
+        Claim("c2", "budget_reallocated", support=requires("c1"), min_role="manager",
               eligible_authors=frozenset({"carol", "erin", "frank"})),
-        Claim("c3", "timeline_slipped", requires=frozenset({"c2"}), min_role="ic",
+        Claim("c2b", "staffing_frozen", support=ROOT, min_role="manager",
+              eligible_authors=frozenset({"carol", "erin", "frank"})),
+        # Two independent routes to the same conclusion; the filler makes
+        # exactly one live and strands the other.
+        Claim("c3", "timeline_slipped", support=either(["c2"], ["c2b"]), min_role="ic",
               eligible_authors=frozenset({"alice", "bob", "carol"})),
-        Claim("c4", "exec_briefed_on_risk", requires=frozenset({"c3"}), target=True, min_role="exec"),
-        Claim("c5", "vendor_contract_amended", requires=frozenset({"c1"}), min_role="ic",
+        Claim("c4", "exec_briefed_on_risk", support=requires("c3"), target=True, min_role="exec"),
+        Claim("c5", "vendor_contract_amended", support=requires("c1"), min_role="ic",
               eligible_authors=frozenset({"dave", "erin"})),
-        Claim("c6", "office_lease_renewed", requires=frozenset(), min_role="ic",
+        Claim("c6", "office_lease_renewed", support=ROOT, min_role="ic",
               eligible_authors=frozenset({"grace", "heidi"})),
     ]
 }

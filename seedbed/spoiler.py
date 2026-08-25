@@ -8,8 +8,9 @@ import json
 from dataclasses import asdict
 from typing import Any, Dict
 
-from .access import AccessLogic, build_adjacency, shortest_path
+from .access import AccessLogic
 from .cheat import check_cheatability
+from .difficulty import recovery_edges
 from .difficulty import score as score_difficulty
 from .fill import assumed_fill
 from .model import World
@@ -27,26 +28,27 @@ def build_spoiler_log(world: World, logic: AccessLogic, seed: int) -> Dict[str, 
         )
 
     cheat_result = check_cheatability(world, fill_result.placement, logic, seed)
-    difficulty = score_difficulty(world, fill_result.placement, logic)
-
-    adj = build_adjacency(world, logic)
-    chain_ids = sorted(world.chain_claim_ids())
-    recovery_path = []
-    for cid in chain_ids:
-        claim = world.claims[cid]
-        slot_id = fill_result.placement[cid]
-        paths_from_prereqs = {
-            req: shortest_path(adj, fill_result.placement[req], slot_id) for req in sorted(claim.requires)
-        }
-        recovery_path.append(
-            {
-                "claim": cid,
-                "label": claim.label,
-                "slot": slot_id,
-                "requires": sorted(claim.requires),
-                "paths_from_prereqs": paths_from_prereqs,
-            }
+    if not cheat_result.uncheatable:
+        raise RuntimeError(
+            f"assumed_fill produced a cheatable placement (recoverable from subset "
+            f"{sorted(cheat_result.counterexample or ())}) -- the fill's "
+            "single-live-alternative invariant should make this impossible"
         )
+
+    difficulty = score_difficulty(world, fill_result.placement, logic)
+    route = sorted(solve_result.live_route)
+
+    recovery_path = [
+        {
+            "from_claim": supporter,
+            "from_label": world.claims[supporter].label,
+            "to_claim": cid,
+            "to_label": world.claims[cid].label,
+            "slot_path": path,
+            "hops": max(len(path) - 1, 0),
+        }
+        for supporter, cid, path in recovery_edges(world, fill_result.placement, logic)
+    ]
 
     return {
         "seed": seed,
@@ -54,11 +56,18 @@ def build_spoiler_log(world: World, logic: AccessLogic, seed: int) -> Dict[str, 
         "claim_order": fill_result.order,
         "placement": fill_result.placement,
         "rolls": [asdict(r) for r in fill_result.rolls],
+        "search": {
+            "nodes_explored": fill_result.nodes_explored,
+            "backtracks": fill_result.backtracks,
+        },
         "solvable": solve_result.solved,
         "known_claims": sorted(solve_result.known),
+        "live_route": route,
+        "stranded_claims": sorted(set(fill_result.placement) - set(route)),
         "uncheatable": cheat_result.uncheatable,
         "cheatability_checked": cheat_result.subsets_checked,
         "cheatability_exhaustive": cheat_result.exhaustive,
+        "redundant_support": sorted(cheat_result.redundant_support),
         "recovery_path": recovery_path,
         "difficulty": asdict(difficulty),
     }

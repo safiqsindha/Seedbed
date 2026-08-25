@@ -1,20 +1,30 @@
 """Cheatability check (component 5): confirm the solver FAILS on every
-proper subset of the placed chain evidence -- no shortcut exists.
+proper subset of the *load-bearing* evidence -- no shortcut exists.
 
-Only chain claims (the transitive requires-closure of the target) are ever
-varied: distractor claims never appear in any target's requires-closure by
-definition, so including or excluding them from a subset can never change
-whether the target is recoverable. Restricting subset generation to chain
-claims is therefore an exact simplification, not an approximation.
+What gets varied matters. An earlier revision varied the transitive
+prerequisite closure under a purely conjunctive model, which made the check
+vacuous: with AND-only support, dropping any chain claim breaks the chain by
+construction, so `uncheatable` was a theorem about the data structure rather
+than a measurement of the seed. Fed 2000 deliberately absurd placements it
+never once returned False.
 
-Exhaustive subset checking is 2^n - 2 runs for n pieces of chain evidence;
-tractable for small worlds. Past `exhaustive_limit`, sampling is used and
-the fact is recorded in the result -- never silently assumed. The sampling
-strategy always checks every single-item removal (the cheapest, most
-direct "is this one piece of evidence load-bearing" test) plus randomly
-sized subsets, per arXiv:2510.11956's finding that controlling which hops
-are covered -- not uniform random coverage -- is what actually surfaces
-disconnected-reasoning shortcuts.
+Two changes make it a real check:
+
+  * Claims support disjunctive alternatives (see model.Support), so a target
+    genuinely can have two independent routes. That is what a shortcut *is*,
+    and it is now expressible.
+  * The subsets varied are the solver's `live_route` -- the claims actually
+    credited for reaching the target -- rather than every claim that could
+    theoretically contribute. Distractors are *supposed* to be droppable;
+    requiring otherwise would fail every world with a decoy in it.
+
+Exhaustive checking is 2^n - 2 solver runs for n live-route claims, which is
+cheap at toy sizes. Past `exhaustive_limit` it samples and says so in the
+result -- never silently. Sampling always covers every single-claim removal
+first (the cheapest, most direct "is this claim load-bearing" probe), then
+draws randomly sized subsets, per arXiv:2510.11956's finding that
+controlling which hops are covered -- rather than sampling uniformly -- is
+what actually surfaces disconnected reasoning.
 """
 
 from __future__ import annotations
@@ -37,6 +47,11 @@ class CheatabilityResult:
     exhaustive: bool
     subsets_checked: int
     counterexample: Optional[FrozenSet[str]]
+    live_route: FrozenSet[str]
+    #: Live-route claims with more than one satisfied support alternative.
+    #: Non-empty means the placement contains redundant support, which is
+    #: the structural cause of every cheatable seed.
+    redundant_support: FrozenSet[str]
 
 
 def _subsets(
@@ -49,7 +64,7 @@ def _subsets(
                 yield frozenset(combo)
         return
 
-    for cid in ids:  # always check every single-item removal
+    for cid in ids:  # always check every single-claim removal
         yield frozenset(ids) - {cid}
     for _ in range(sample_size):
         k = rng.randint(0, n - 1)
@@ -68,26 +83,33 @@ def check_cheatability(
     if not full.solved:
         raise ValueError("placement is not solvable; cheatability is undefined until it is")
 
-    chain_ids = sorted(world.chain_claim_ids())
-    exhaustive = len(chain_ids) <= exhaustive_limit
+    route = full.live_route
+    route_ids = sorted(route)
+    exhaustive = len(route_ids) <= exhaustive_limit
     rng = random.Random(seed)
 
     checked = 0
-    for subset in _subsets(chain_ids, exhaustive, rng, sample_size):
+    for subset in _subsets(route_ids, exhaustive, rng, sample_size):
         checked += 1
-        sub_placement = dict(placement)
-        for cid in chain_ids:
+        sub_placement: Dict[str, Optional[str]] = dict(placement)
+        for cid in route_ids:
             if cid not in subset:
                 sub_placement[cid] = None
-        result = solve(world, sub_placement, logic)
-        if result.solved:
+        if solve(world, sub_placement, logic).solved:
             return CheatabilityResult(
                 uncheatable=False,
                 exhaustive=exhaustive,
                 subsets_checked=checked,
                 counterexample=subset,
+                live_route=route,
+                redundant_support=full.redundantly_supported,
             )
 
     return CheatabilityResult(
-        uncheatable=True, exhaustive=exhaustive, subsets_checked=checked, counterexample=None
+        uncheatable=True,
+        exhaustive=exhaustive,
+        subsets_checked=checked,
+        counterexample=None,
+        live_route=route,
+        redundant_support=full.redundantly_supported,
     )
