@@ -1,0 +1,1322 @@
+You are given a placement of claims into slots, and must determine which claims are recoverable and how.
+
+DEFINITIONS
+- Each SLOT has an id and an author (an actor). A slot may carry zero or more claims (see "claims_carried_here").
+- Each CLAIM has an id, a "target" flag, a "min_role" (the minimum authority role its author must hold), an optional "eligible_authors" list (if present, only those actor ids may carry this claim), and "support_alternatives": a list of alternative prerequisite sets. Satisfying ANY ONE alternative is enough to establish the claim. An alternative that is an empty list needs no prerequisites at all (a root claim).
+- ACCESS_EDGES is a directed graph over slot ids. Edge [a, b] means information present at slot a can reach slot b. Reachability is transitive (a path of edges, not just one hop) but NOT symmetric -- do not assume [a, b] implies [b, a].
+- Role authority, low to high, is given by "role_order_low_to_high".
+
+RECOVERY RULE (apply until no more claims can be added -- a fixed point)
+A claim C is KNOWN if all of the following hold:
+  1. C is carried by some slot S (i.e. C appears in S's "claims_carried_here").
+  2. S's author may legally carry C: the author's role rank is >= C's "min_role" rank, AND (if C has "eligible_authors") the author is in that list.
+  3. At least one of C's "support_alternatives" is fully satisfied: every prerequisite claim P in that alternative is itself KNOWN, and P's carrying slot can reach S via one or more ACCESS_EDGES (a path, possibly through slots that carry no claim at all -- those slots still exist as pass-through points in the graph even though they don't appear in "claims_carried_here" for any claim).
+A claim with an empty-list alternative needs no prerequisite path check for that alternative (rule 3 is trivially satisfied by that alternative).
+
+A claim NOT carried by any slot (absent from every "claims_carried_here") can never become known.
+
+TASK
+Determine whether the claim with "target": true is KNOWN under this rule. If it is, report the full set of claim ids that are load-bearing for it: the target itself, plus every claim actually used (directly or transitively, via the specific support alternative that got credited) to establish it. Do not include claims that happen to be KNOWN but play no part in supporting the target.
+
+OUTPUT
+Respond with ONLY a single JSON object, no other text, of the exact shape:
+{"target_known": <true|false>, "chain": [<claim ids load-bearing for the target, or [] if target_known is false>]}
+
+FACTS:
+{
+  "access_edges": [
+    [
+      "s01",
+      "s02"
+    ],
+    [
+      "s01",
+      "s03"
+    ],
+    [
+      "s01",
+      "s04"
+    ],
+    [
+      "s01",
+      "s05"
+    ],
+    [
+      "s01",
+      "s06"
+    ],
+    [
+      "s01",
+      "s08"
+    ],
+    [
+      "s01",
+      "s09"
+    ],
+    [
+      "s01",
+      "s10"
+    ],
+    [
+      "s01",
+      "s34"
+    ],
+    [
+      "s01",
+      "s35"
+    ],
+    [
+      "s02",
+      "s03"
+    ],
+    [
+      "s02",
+      "s04"
+    ],
+    [
+      "s02",
+      "s05"
+    ],
+    [
+      "s02",
+      "s06"
+    ],
+    [
+      "s02",
+      "s08"
+    ],
+    [
+      "s02",
+      "s09"
+    ],
+    [
+      "s02",
+      "s10"
+    ],
+    [
+      "s02",
+      "s34"
+    ],
+    [
+      "s02",
+      "s35"
+    ],
+    [
+      "s03",
+      "s02"
+    ],
+    [
+      "s03",
+      "s04"
+    ],
+    [
+      "s03",
+      "s05"
+    ],
+    [
+      "s03",
+      "s06"
+    ],
+    [
+      "s03",
+      "s08"
+    ],
+    [
+      "s03",
+      "s09"
+    ],
+    [
+      "s03",
+      "s10"
+    ],
+    [
+      "s03",
+      "s34"
+    ],
+    [
+      "s03",
+      "s35"
+    ],
+    [
+      "s04",
+      "s05"
+    ],
+    [
+      "s04",
+      "s06"
+    ],
+    [
+      "s04",
+      "s08"
+    ],
+    [
+      "s04",
+      "s09"
+    ],
+    [
+      "s04",
+      "s10"
+    ],
+    [
+      "s04",
+      "s34"
+    ],
+    [
+      "s04",
+      "s35"
+    ],
+    [
+      "s05",
+      "s06"
+    ],
+    [
+      "s05",
+      "s07"
+    ],
+    [
+      "s05",
+      "s09"
+    ],
+    [
+      "s05",
+      "s10"
+    ],
+    [
+      "s05",
+      "s12"
+    ],
+    [
+      "s05",
+      "s22"
+    ],
+    [
+      "s05",
+      "s23"
+    ],
+    [
+      "s05",
+      "s24"
+    ],
+    [
+      "s05",
+      "s31"
+    ],
+    [
+      "s05",
+      "s34"
+    ],
+    [
+      "s05",
+      "s35"
+    ],
+    [
+      "s05",
+      "s40"
+    ],
+    [
+      "s06",
+      "s07"
+    ],
+    [
+      "s06",
+      "s09"
+    ],
+    [
+      "s06",
+      "s10"
+    ],
+    [
+      "s06",
+      "s12"
+    ],
+    [
+      "s06",
+      "s22"
+    ],
+    [
+      "s06",
+      "s23"
+    ],
+    [
+      "s06",
+      "s24"
+    ],
+    [
+      "s06",
+      "s31"
+    ],
+    [
+      "s06",
+      "s35"
+    ],
+    [
+      "s06",
+      "s40"
+    ],
+    [
+      "s07",
+      "s06"
+    ],
+    [
+      "s07",
+      "s09"
+    ],
+    [
+      "s07",
+      "s10"
+    ],
+    [
+      "s07",
+      "s12"
+    ],
+    [
+      "s07",
+      "s22"
+    ],
+    [
+      "s07",
+      "s23"
+    ],
+    [
+      "s07",
+      "s24"
+    ],
+    [
+      "s07",
+      "s31"
+    ],
+    [
+      "s07",
+      "s35"
+    ],
+    [
+      "s07",
+      "s40"
+    ],
+    [
+      "s08",
+      "s04"
+    ],
+    [
+      "s08",
+      "s05"
+    ],
+    [
+      "s08",
+      "s06"
+    ],
+    [
+      "s08",
+      "s09"
+    ],
+    [
+      "s08",
+      "s10"
+    ],
+    [
+      "s08",
+      "s34"
+    ],
+    [
+      "s08",
+      "s35"
+    ],
+    [
+      "s09",
+      "s10"
+    ],
+    [
+      "s09",
+      "s34"
+    ],
+    [
+      "s09",
+      "s35"
+    ],
+    [
+      "s10",
+      "s11"
+    ],
+    [
+      "s10",
+      "s12"
+    ],
+    [
+      "s10",
+      "s22"
+    ],
+    [
+      "s10",
+      "s23"
+    ],
+    [
+      "s10",
+      "s24"
+    ],
+    [
+      "s10",
+      "s31"
+    ],
+    [
+      "s10",
+      "s35"
+    ],
+    [
+      "s10",
+      "s40"
+    ],
+    [
+      "s11",
+      "s10"
+    ],
+    [
+      "s11",
+      "s12"
+    ],
+    [
+      "s11",
+      "s13"
+    ],
+    [
+      "s11",
+      "s14"
+    ],
+    [
+      "s11",
+      "s15"
+    ],
+    [
+      "s11",
+      "s21"
+    ],
+    [
+      "s11",
+      "s22"
+    ],
+    [
+      "s11",
+      "s23"
+    ],
+    [
+      "s11",
+      "s24"
+    ],
+    [
+      "s11",
+      "s25"
+    ],
+    [
+      "s11",
+      "s31"
+    ],
+    [
+      "s11",
+      "s40"
+    ],
+    [
+      "s12",
+      "s10"
+    ],
+    [
+      "s12",
+      "s11"
+    ],
+    [
+      "s12",
+      "s13"
+    ],
+    [
+      "s12",
+      "s14"
+    ],
+    [
+      "s12",
+      "s15"
+    ],
+    [
+      "s12",
+      "s21"
+    ],
+    [
+      "s12",
+      "s22"
+    ],
+    [
+      "s12",
+      "s23"
+    ],
+    [
+      "s12",
+      "s24"
+    ],
+    [
+      "s12",
+      "s25"
+    ],
+    [
+      "s12",
+      "s31"
+    ],
+    [
+      "s12",
+      "s35"
+    ],
+    [
+      "s12",
+      "s40"
+    ],
+    [
+      "s13",
+      "s14"
+    ],
+    [
+      "s13",
+      "s15"
+    ],
+    [
+      "s13",
+      "s21"
+    ],
+    [
+      "s13",
+      "s25"
+    ],
+    [
+      "s14",
+      "s15"
+    ],
+    [
+      "s14",
+      "s21"
+    ],
+    [
+      "s14",
+      "s22"
+    ],
+    [
+      "s14",
+      "s23"
+    ],
+    [
+      "s14",
+      "s24"
+    ],
+    [
+      "s14",
+      "s25"
+    ],
+    [
+      "s14",
+      "s31"
+    ],
+    [
+      "s14",
+      "s40"
+    ],
+    [
+      "s15",
+      "s16"
+    ],
+    [
+      "s15",
+      "s17"
+    ],
+    [
+      "s15",
+      "s18"
+    ],
+    [
+      "s15",
+      "s19"
+    ],
+    [
+      "s15",
+      "s20"
+    ],
+    [
+      "s15",
+      "s21"
+    ],
+    [
+      "s15",
+      "s25"
+    ],
+    [
+      "s15",
+      "s38"
+    ],
+    [
+      "s15",
+      "s39"
+    ],
+    [
+      "s16",
+      "s15"
+    ],
+    [
+      "s16",
+      "s17"
+    ],
+    [
+      "s16",
+      "s18"
+    ],
+    [
+      "s16",
+      "s19"
+    ],
+    [
+      "s16",
+      "s20"
+    ],
+    [
+      "s16",
+      "s21"
+    ],
+    [
+      "s16",
+      "s25"
+    ],
+    [
+      "s16",
+      "s38"
+    ],
+    [
+      "s16",
+      "s39"
+    ],
+    [
+      "s17",
+      "s15"
+    ],
+    [
+      "s17",
+      "s16"
+    ],
+    [
+      "s17",
+      "s18"
+    ],
+    [
+      "s17",
+      "s19"
+    ],
+    [
+      "s17",
+      "s20"
+    ],
+    [
+      "s17",
+      "s21"
+    ],
+    [
+      "s17",
+      "s25"
+    ],
+    [
+      "s17",
+      "s38"
+    ],
+    [
+      "s17",
+      "s39"
+    ],
+    [
+      "s18",
+      "s19"
+    ],
+    [
+      "s18",
+      "s20"
+    ],
+    [
+      "s18",
+      "s38"
+    ],
+    [
+      "s18",
+      "s39"
+    ],
+    [
+      "s19",
+      "s18"
+    ],
+    [
+      "s19",
+      "s20"
+    ],
+    [
+      "s19",
+      "s21"
+    ],
+    [
+      "s19",
+      "s25"
+    ],
+    [
+      "s19",
+      "s38"
+    ],
+    [
+      "s19",
+      "s39"
+    ],
+    [
+      "s20",
+      "s21"
+    ],
+    [
+      "s20",
+      "s25"
+    ],
+    [
+      "s20",
+      "s38"
+    ],
+    [
+      "s20",
+      "s39"
+    ],
+    [
+      "s21",
+      "s22"
+    ],
+    [
+      "s21",
+      "s23"
+    ],
+    [
+      "s21",
+      "s24"
+    ],
+    [
+      "s21",
+      "s25"
+    ],
+    [
+      "s21",
+      "s31"
+    ],
+    [
+      "s21",
+      "s40"
+    ],
+    [
+      "s22",
+      "s23"
+    ],
+    [
+      "s22",
+      "s24"
+    ],
+    [
+      "s22",
+      "s25"
+    ],
+    [
+      "s22",
+      "s31"
+    ],
+    [
+      "s22",
+      "s40"
+    ],
+    [
+      "s23",
+      "s24"
+    ],
+    [
+      "s23",
+      "s25"
+    ],
+    [
+      "s23",
+      "s30"
+    ],
+    [
+      "s23",
+      "s31"
+    ],
+    [
+      "s23",
+      "s40"
+    ],
+    [
+      "s24",
+      "s25"
+    ],
+    [
+      "s24",
+      "s30"
+    ],
+    [
+      "s24",
+      "s31"
+    ],
+    [
+      "s24",
+      "s40"
+    ],
+    [
+      "s25",
+      "s24"
+    ],
+    [
+      "s25",
+      "s31"
+    ],
+    [
+      "s25",
+      "s40"
+    ],
+    [
+      "s26",
+      "s27"
+    ],
+    [
+      "s26",
+      "s28"
+    ],
+    [
+      "s26",
+      "s29"
+    ],
+    [
+      "s26",
+      "s30"
+    ],
+    [
+      "s26",
+      "s36"
+    ],
+    [
+      "s26",
+      "s37"
+    ],
+    [
+      "s27",
+      "s28"
+    ],
+    [
+      "s27",
+      "s29"
+    ],
+    [
+      "s27",
+      "s30"
+    ],
+    [
+      "s27",
+      "s36"
+    ],
+    [
+      "s27",
+      "s37"
+    ],
+    [
+      "s28",
+      "s29"
+    ],
+    [
+      "s28",
+      "s30"
+    ],
+    [
+      "s28",
+      "s36"
+    ],
+    [
+      "s28",
+      "s37"
+    ],
+    [
+      "s29",
+      "s07"
+    ],
+    [
+      "s29",
+      "s12"
+    ],
+    [
+      "s29",
+      "s22"
+    ],
+    [
+      "s29",
+      "s23"
+    ],
+    [
+      "s29",
+      "s24"
+    ],
+    [
+      "s29",
+      "s30"
+    ],
+    [
+      "s29",
+      "s31"
+    ],
+    [
+      "s29",
+      "s36"
+    ],
+    [
+      "s29",
+      "s37"
+    ],
+    [
+      "s29",
+      "s40"
+    ],
+    [
+      "s30",
+      "s31"
+    ],
+    [
+      "s30",
+      "s40"
+    ],
+    [
+      "s31",
+      "s30"
+    ],
+    [
+      "s31",
+      "s40"
+    ],
+    [
+      "s32",
+      "s16"
+    ],
+    [
+      "s32",
+      "s17"
+    ],
+    [
+      "s32",
+      "s18"
+    ],
+    [
+      "s32",
+      "s19"
+    ],
+    [
+      "s32",
+      "s20"
+    ],
+    [
+      "s32",
+      "s33"
+    ],
+    [
+      "s32",
+      "s38"
+    ],
+    [
+      "s32",
+      "s39"
+    ],
+    [
+      "s33",
+      "s16"
+    ],
+    [
+      "s33",
+      "s17"
+    ],
+    [
+      "s33",
+      "s18"
+    ],
+    [
+      "s33",
+      "s19"
+    ],
+    [
+      "s33",
+      "s20"
+    ],
+    [
+      "s33",
+      "s38"
+    ],
+    [
+      "s33",
+      "s39"
+    ],
+    [
+      "s37",
+      "s30"
+    ],
+    [
+      "s38",
+      "s21"
+    ],
+    [
+      "s38",
+      "s25"
+    ],
+    [
+      "s39",
+      "s21"
+    ],
+    [
+      "s39",
+      "s25"
+    ]
+  ],
+  "actors": [
+    {
+      "id": "alice",
+      "role": "ic"
+    },
+    {
+      "id": "bob",
+      "role": "ic"
+    },
+    {
+      "id": "carol",
+      "role": "manager"
+    },
+    {
+      "id": "dave",
+      "role": "ic"
+    },
+    {
+      "id": "erin",
+      "role": "manager"
+    },
+    {
+      "id": "frank",
+      "role": "exec"
+    },
+    {
+      "id": "grace",
+      "role": "ic"
+    },
+    {
+      "id": "heidi",
+      "role": "manager"
+    }
+  ],
+  "claims": [
+    {
+      "eligible_authors": [
+        "dave",
+        "erin"
+      ],
+      "id": "c1",
+      "min_role": "ic",
+      "support_alternatives": [
+        []
+      ],
+      "target": false
+    },
+    {
+      "eligible_authors": [
+        "carol",
+        "erin",
+        "frank"
+      ],
+      "id": "c2",
+      "min_role": "manager",
+      "support_alternatives": [
+        [
+          "c1"
+        ]
+      ],
+      "target": false
+    },
+    {
+      "eligible_authors": [
+        "carol",
+        "erin",
+        "frank"
+      ],
+      "id": "c2b",
+      "min_role": "manager",
+      "support_alternatives": [
+        []
+      ],
+      "target": false
+    },
+    {
+      "eligible_authors": [
+        "alice",
+        "bob",
+        "carol"
+      ],
+      "id": "c3",
+      "min_role": "ic",
+      "support_alternatives": [
+        [
+          "c2"
+        ],
+        [
+          "c2b"
+        ]
+      ],
+      "target": false
+    },
+    {
+      "eligible_authors": null,
+      "id": "c4",
+      "min_role": "exec",
+      "support_alternatives": [
+        [
+          "c3"
+        ]
+      ],
+      "target": true
+    },
+    {
+      "eligible_authors": [
+        "dave",
+        "erin"
+      ],
+      "id": "c5",
+      "min_role": "ic",
+      "support_alternatives": [
+        [
+          "c1"
+        ]
+      ],
+      "target": false
+    },
+    {
+      "eligible_authors": [
+        "grace",
+        "heidi"
+      ],
+      "id": "c6",
+      "min_role": "ic",
+      "support_alternatives": [
+        []
+      ],
+      "target": false
+    }
+  ],
+  "role_order_low_to_high": [
+    "ic",
+    "manager",
+    "exec"
+  ],
+  "seed": 28,
+  "slots": [
+    {
+      "author": "dave",
+      "claims_carried_here": [],
+      "id": "s01"
+    },
+    {
+      "author": "dave",
+      "claims_carried_here": [],
+      "id": "s02"
+    },
+    {
+      "author": "erin",
+      "claims_carried_here": [],
+      "id": "s03"
+    },
+    {
+      "author": "dave",
+      "claims_carried_here": [],
+      "id": "s04"
+    },
+    {
+      "author": "erin",
+      "claims_carried_here": [],
+      "id": "s05"
+    },
+    {
+      "author": "erin",
+      "claims_carried_here": [],
+      "id": "s06"
+    },
+    {
+      "author": "frank",
+      "claims_carried_here": [],
+      "id": "s07"
+    },
+    {
+      "author": "dave",
+      "claims_carried_here": [],
+      "id": "s08"
+    },
+    {
+      "author": "erin",
+      "claims_carried_here": [],
+      "id": "s09"
+    },
+    {
+      "author": "erin",
+      "claims_carried_here": [],
+      "id": "s10"
+    },
+    {
+      "author": "carol",
+      "claims_carried_here": [],
+      "id": "s11"
+    },
+    {
+      "author": "frank",
+      "claims_carried_here": [],
+      "id": "s12"
+    },
+    {
+      "author": "carol",
+      "claims_carried_here": [],
+      "id": "s13"
+    },
+    {
+      "author": "carol",
+      "claims_carried_here": [],
+      "id": "s14"
+    },
+    {
+      "author": "carol",
+      "claims_carried_here": [
+        "c2"
+      ],
+      "id": "s15"
+    },
+    {
+      "author": "alice",
+      "claims_carried_here": [],
+      "id": "s16"
+    },
+    {
+      "author": "bob",
+      "claims_carried_here": [],
+      "id": "s17"
+    },
+    {
+      "author": "alice",
+      "claims_carried_here": [
+        "c3"
+      ],
+      "id": "s18"
+    },
+    {
+      "author": "bob",
+      "claims_carried_here": [],
+      "id": "s19"
+    },
+    {
+      "author": "alice",
+      "claims_carried_here": [],
+      "id": "s20"
+    },
+    {
+      "author": "carol",
+      "claims_carried_here": [],
+      "id": "s21"
+    },
+    {
+      "author": "frank",
+      "claims_carried_here": [],
+      "id": "s22"
+    },
+    {
+      "author": "frank",
+      "claims_carried_here": [],
+      "id": "s23"
+    },
+    {
+      "author": "frank",
+      "claims_carried_here": [
+        "c4"
+      ],
+      "id": "s24"
+    },
+    {
+      "author": "carol",
+      "claims_carried_here": [],
+      "id": "s25"
+    },
+    {
+      "author": "grace",
+      "claims_carried_here": [
+        "c6"
+      ],
+      "id": "s26"
+    },
+    {
+      "author": "heidi",
+      "claims_carried_here": [],
+      "id": "s27"
+    },
+    {
+      "author": "grace",
+      "claims_carried_here": [],
+      "id": "s28"
+    },
+    {
+      "author": "heidi",
+      "claims_carried_here": [],
+      "id": "s29"
+    },
+    {
+      "author": "heidi",
+      "claims_carried_here": [],
+      "id": "s30"
+    },
+    {
+      "author": "frank",
+      "claims_carried_here": [
+        "c2b"
+      ],
+      "id": "s31"
+    },
+    {
+      "author": "alice",
+      "claims_carried_here": [],
+      "id": "s32"
+    },
+    {
+      "author": "bob",
+      "claims_carried_here": [],
+      "id": "s33"
+    },
+    {
+      "author": "dave",
+      "claims_carried_here": [
+        "c5"
+      ],
+      "id": "s34"
+    },
+    {
+      "author": "erin",
+      "claims_carried_here": [],
+      "id": "s35"
+    },
+    {
+      "author": "grace",
+      "claims_carried_here": [],
+      "id": "s36"
+    },
+    {
+      "author": "heidi",
+      "claims_carried_here": [],
+      "id": "s37"
+    },
+    {
+      "author": "bob",
+      "claims_carried_here": [],
+      "id": "s38"
+    },
+    {
+      "author": "alice",
+      "claims_carried_here": [],
+      "id": "s39"
+    },
+    {
+      "author": "frank",
+      "claims_carried_here": [],
+      "id": "s40"
+    }
+  ],
+  "tier": "standard",
+  "world": "toy"
+}

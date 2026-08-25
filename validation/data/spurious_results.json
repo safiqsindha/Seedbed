@@ -1,0 +1,113 @@
+{
+  "overall_rate": 0.0,
+  "rows": [
+    {
+      "task_id": "toy_easy_040_ablate_c3",
+      "base_task_id": "toy_easy_040",
+      "world": "toy",
+      "tier": "easy",
+      "dropped_claim": "c3",
+      "n_attempts": 2,
+      "spurious_rate": 0.0
+    },
+    {
+      "task_id": "toy_easy_030_ablate_c3",
+      "base_task_id": "toy_easy_030",
+      "world": "toy",
+      "tier": "easy",
+      "dropped_claim": "c3",
+      "n_attempts": 2,
+      "spurious_rate": 0.0
+    },
+    {
+      "task_id": "toy_easy_057_ablate_c2b",
+      "base_task_id": "toy_easy_057",
+      "world": "toy",
+      "tier": "easy",
+      "dropped_claim": "c2b",
+      "n_attempts": 2,
+      "spurious_rate": 0.0
+    },
+    {
+      "task_id": "toy_standard_056_ablate_c2b",
+      "base_task_id": "toy_standard_056",
+      "world": "toy",
+      "tier": "standard",
+      "dropped_claim": "c2b",
+      "n_attempts": 2,
+      "spurious_rate": 0.0
+    },
+    {
+      "task_id": "toy_easy_015_ablate_c2b",
+      "base_task_id": "toy_easy_015",
+      "world": "toy",
+      "tier": "easy",
+      "dropped_claim": "c2b",
+      "n_attempts": 2,
+      "spurious_rate": 0.0
+    },
+    {
+      "task_id": "toy_standard_028_ablate_c1",
+      "base_task_id": "toy_standard_028",
+      "world": "toy",
+      "tier": "standard",
+      "dropped_claim": "c1",
+      "n_attempts": 2,
+      "spurious_rate": 0.0
+    },
+    {
+      "task_id": "relay_easy_042_ablate_e1",
+      "base_task_id": "relay_easy_042",
+      "world": "relay",
+      "tier": "easy",
+      "dropped_claim": "e1",
+      "n_attempts": 2,
+      "spurious_rate": 0.0
+    },
+    {
+      "task_id": "toy_standard_055_ablate_c2b",
+      "base_task_id": "toy_standard_055",
+      "world": "toy",
+      "tier": "standard",
+      "dropped_claim": "c2b",
+      "n_attempts": 2,
+      "spurious_rate": 0.0
+    },
+    {
+      "task_id": "relay_hard_055_ablate_e1",
+      "base_task_id": "relay_hard_055",
+      "world": "relay",
+      "tier": "hard",
+      "dropped_claim": "e1",
+      "n_attempts": 2,
+      "spurious_rate": 0.0
+    },
+    {
+      "task_id": "relay_standard_038_ablate_e4",
+      "base_task_id": "relay_standard_038",
+      "world": "relay",
+      "tier": "standard",
+      "dropped_claim": "e4",
+      "n_attempts": 2,
+      "spurious_rate": 0.0
+    },
+    {
+      "task_id": "relay_hard_024_ablate_e4",
+      "base_task_id": "relay_hard_024",
+      "world": "relay",
+      "tier": "hard",
+      "dropped_claim": "e4",
+      "n_attempts": 2,
+      "spurious_rate": 0.0
+    },
+    {
+      "task_id": "relay_standard_008_ablate_e2",
+      "base_task_id": "relay_standard_008",
+      "world": "relay",
+      "tier": "standard",
+      "dropped_claim": "e2",
+      "n_attempts": 2,
+      "spurious_rate": 0.0
+    }
+  ]
+}
