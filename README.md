@@ -1,16 +1,35 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/banner-dark.svg">
+    <img src="assets/banner-light.svg" alt="Seedbed" width="100%">
+  </picture>
+</p>
+
 # Seedbed
-Seeded evidence placement for reasoning benchmarks.
-Seedbed scatters atomic claims across a graph of artifact slots so that the reasoning chain is maximally tangled but provably recoverable. Borrowing assumed-fill from game randomizers, it guarantees every seed is solvable, verifies it can’t be shortcut, scores its difficulty, and emits a spoiler log — so benchmarks are reproducible from a seed instead of hand-curated.
 
-Standalone Python library: no LLM calls, no prose generation, no external services -- pure, deterministic, seeded algorithms. See `docs/PRIOR_ART_REPORT.md` for the randomizer prior art this borrows from and how its concepts map onto evidence placement.
+**Generate reasoning benchmarks from a seed instead of hand-curating them.**
 
-## Quickstart
+Seedbed scatters atomic claims across a graph of artifact slots so the reasoning chain is maximally tangled but provably recoverable. Borrowing assumed-fill from game randomizers, it guarantees every seed is solvable, verifies it cannot be shortcut, scores its difficulty, and emits a spoiler log.
 
-```
+- **Provably solvable, provably uncheatable** — every placement is verified by a reference solver, and no proper subset of the live route can recover the target
+- **Reproducible *and* explicable** — same seed and tier give a byte-identical placement, and the log carries the whole search including undone branches and every RNG draw
+- **Honest about its limits** — the guarantees section below states what is *not* guaranteed, with measurements
+- **Pure and deterministic** — no LLM calls, no prose generation, no external services; stdlib only
+
+[![tests](https://github.com/safiqsindha/Seedbed/actions/workflows/tests.yml/badge.svg)](https://github.com/safiqsindha/Seedbed/actions/workflows/tests.yml)
+![Python](https://img.shields.io/badge/python-3.10%E2%80%933.12-0891b2?style=flat-square)
+![Deterministic](https://img.shields.io/badge/seeded-deterministic-0D9488?style=flat-square)
+![No LLM](https://img.shields.io/badge/LLM%20calls-none-0D9488?style=flat-square)
+
+**[Module API](#using-it-as-a-module)** · **[Bundled worlds](#bundled-worlds)** · **[Guarantees](#what-is-and-isnt-guaranteed)** · **[Prior art](docs/PRIOR_ART_REPORT.md)** · **[Validation report](validation/REPORT.md)**
+
+```bash
 pip install -e .
 seedbed --world toy --tier standard --seed 0    # prints a spoiler log as JSON
-python -m pytest                                # run the test suite
+python -m pytest
 ```
+
+See [`docs/PRIOR_ART_REPORT.md`](docs/PRIOR_ART_REPORT.md) for the randomizer prior art this borrows from and how its concepts map onto evidence placement.
 
 ## Using it as a module
 
@@ -88,3 +107,13 @@ measurements, in [`docs/PRIOR_ART_REPORT.md` §6](docs/PRIOR_ART_REPORT.md).
 - *Monotone difficulty across independently generated placements.* Different tiers pick different support routes, so those totals describe different puzzles. That reading holds only 69/100 and is not claimed.
 - *Calibrated weights.* `DEFAULT_WEIGHTS` are placeholders, not tuned against any real benchmark. A first attempt at validating them against actual recovery accuracy is in [`validation/REPORT.md`](validation/REPORT.md) — inconclusive on the two bundled worlds (a frontier model is near ceiling across their whole difficulty range), which is itself the finding: these worlds don't yet get hard enough to tell.
 - *Unbounded scale.* Past a few hundred slots, `build_adjacency` is O(slots²) and dominates — 800 slots takes ~220 s while the search itself explores only ~630 nodes. That is a graph-construction cost, not a search problem. `validation/profile_adjacency.py` reconfirms the O(n²) shape on a synthetic world; the fix (bucket slots by team/thread/meeting/reporting line instead of an all-pairs scan) is identified but not implemented.
+
+---
+
+## Non-goals
+
+Rendering, prose generation, and LLM integration sit deliberately outside the library. A renderer consumes a `GeneratedSeed`; it never reaches into the engine. `validation/` lives outside the library for the same reason.
+
+## License
+
+No license file is present in this repository. Contact the maintainer before reuse.
